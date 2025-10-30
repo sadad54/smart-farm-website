@@ -1,0 +1,603 @@
+/* ============================================================
+   🌿 SMART FARM - ENHANCED ESP32 CODE
+   Optimized for ultra-low latency with real-time updates
+   ============================================================ */
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <LiquidCrystal_I2C.h>
+#include <dht11.h>
+#include <ESP32_Servo.h>
+
+/* ---------------- WIFI CONFIG ---------------- */
+const char* SSID = "DEv_WIFI";        // ⚠️ CHANGE THIS
+const char* PASS = "1qaz2wsx!";    // ⚠️ CHANGE THIS
+
+/* ---- API Configuration ---- */
+const char* API_BASE  = "https://smart-farm-website-gamma.vercel.app/api";  // ⚠️ CHANGE THIS
+const char* DEVICE_ID = "farm_001";
+
+/* ---------------- PIN MAP ---------------- */
+#define DHT11PIN        17
+#define LEDPIN          27
+#define SERVOPIN        26
+#define FANPIN1         19
+#define FANPIN2         18
+#define STEAMPIN        35
+#define LIGHTPIN        34
+#define SOILHUMIDITYPIN 32
+#define WATERLEVELPIN   33
+#define RELAYPIN        25
+
+/* ---------------- GLOBAL OBJECTS ---------------- */
+dht11 DHT11;
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+AsyncWebServer server(80);
+Servo myservo;
+
+/* ---------------- STATE FLAGS ---------------- */
+static bool ledState = false;
+static bool fanState = false;
+static bool servoState = false;
+static bool systemReady = false;
+
+/* ---------------- TIMERS (OPTIMIZED) ---------------- */
+unsigned long lastSensorSend = 0;
+unsigned long lastCommandCheck = 0;
+unsigned long lastHeartbeat = 0;
+unsigned long lastLCDUpdate = 0;
+
+const long sensorInterval    = 3000;   // 3s for sensor updates
+const long commandInterval   = 1000;   // 1s for ultra-fast command response
+const long heartbeatInterval = 30000;  // 30s heartbeat
+const long lcdUpdateInterval = 2000;   // 2s LCD refresh
+
+/* ---------------- CONNECTION RETRY ---------------- */
+int wifiRetries = 0;
+int apiFailures = 0;
+const int MAX_WIFI_RETRIES = 5;
+const int MAX_API_FAILURES = 3;
+
+/* ============================================================
+   HTML DASHBOARD (Local fallback)
+   ============================================================ */
+const char index_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE HTML><html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Smart Farm Local</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:Arial,sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);
+min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.container{background:#fff;border-radius:20px;padding:30px;max-width:600px;width:100%;
+box-shadow:0 20px 60px rgba(0,0,0,0.3)}
+h1{color:#333;margin-bottom:20px;text-align:center}
+.status{background:#f0f0f0;padding:15px;border-radius:10px;margin-bottom:20px}
+.sensor{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px}
+.sensor-card{background:#f8f9fa;padding:15px;border-radius:10px;text-align:center}
+.sensor-card h3{color:#666;font-size:14px;margin-bottom:5px}
+.sensor-card .value{font-size:24px;font-weight:bold;color:#667eea}
+.btn-group{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+button{padding:15px;font-size:16px;font-weight:bold;border:none;border-radius:10px;
+cursor:pointer;transition:all 0.3s;color:#fff}
+button:active{transform:scale(0.95)}
+.btn-light{background:linear-gradient(135deg,#f093fb 0%,#f5576c 100%)}
+.btn-fan{background:linear-gradient(135deg,#4facfe 0%,#00f2fe 100%)}
+.btn-feed{background:linear-gradient(135deg,#43e97b 0%,#38f9d7 100%)}
+.btn-water{background:linear-gradient(135deg,#fa709a 0%,#fee140 100%)}
+button:hover{opacity:0.9;transform:translateY(-2px);box-shadow:0 5px 15px rgba(0,0,0,0.2)}
+.offline{color:#f5576c;font-weight:bold}
+.online{color:#43e97b;font-weight:bold}
+</style></head>
+<body>
+<div class="container">
+<h1>🌿 Smart Farm Control</h1>
+<div class="status">
+<div id="status">Status: <span class="online">Connected</span></div>
+<div id="ip">IP: Loading...</div>
+</div>
+<div class="sensor" id="sensors">
+<div class="sensor-card"><h3>🌡️ Temperature</h3><div class="value" id="temp">--°C</div></div>
+<div class="sensor-card"><h3>💧 Humidity</h3><div class="value" id="hum">--%</div></div>
+<div class="sensor-card"><h3>🌱 Soil</h3><div class="value" id="soil">--%</div></div>
+<div class="sensor-card"><h3>💦 Water</h3><div class="value" id="water">--%</div></div>
+</div>
+<div class="btn-group">
+<button class="btn-light" onclick="cmd('light')">💡 Light</button>
+<button class="btn-fan" onclick="cmd('fan')">🌀 Fan</button>
+<button class="btn-feed" onclick="cmd('feed')">🌾 Feed</button>
+<button class="btn-water" onclick="cmd('water')">💧 Water</button>
+</div>
+</div>
+<script>
+function cmd(a){fetch('/cmd?action='+a).then(()=>console.log(a));}
+function updateData(){fetch('/data').then(r=>r.json()).then(d=>{
+document.getElementById('temp').textContent=d.temp+'°C';
+document.getElementById('hum').textContent=d.hum+'%';
+document.getElementById('soil').textContent=d.soil+'%';
+document.getElementById('water').textContent=d.water+'%';
+document.getElementById('ip').textContent='IP: '+d.ip;
+}).catch(()=>document.getElementById('status').innerHTML='Status: <span class="offline">Offline</span>');}
+setInterval(updateData,1000);updateData();
+</script>
+</body></html>
+)rawliteral";
+
+/* ============================================================
+   SENSOR READING FUNCTIONS
+   ============================================================ */
+struct SensorData {
+  float temperature;
+  float humidity;
+  float soilMoisture;
+  float waterLevel;
+  float steam;
+  int lightLevel;
+  bool isValid;
+};
+
+SensorData readAllSensors() {
+  SensorData data;
+  data.isValid = true;
+  
+  // Read DHT11
+  int chk = DHT11.read(DHT11PIN);
+  if (chk == 0) {
+    data.temperature = DHT11.temperature;
+    data.humidity = DHT11.humidity;
+  } else {
+    Serial.printf("⚠️ DHT11 Error: %d\n", chk);
+    data.temperature = -999;
+    data.humidity = -999;
+    data.isValid = false;
+  }
+  
+  // Read analog sensors with averaging (reduce noise)
+  const int samples = 3;
+  long soilSum = 0, waterSum = 0, steamSum = 0, lightSum = 0;
+  
+  for(int i = 0; i < samples; i++) {
+    soilSum += analogRead(SOILHUMIDITYPIN);
+    waterSum += analogRead(WATERLEVELPIN);
+    steamSum += analogRead(STEAMPIN);
+    lightSum += analogRead(LIGHTPIN);
+    delay(10);
+  }
+  
+  data.soilMoisture = min((soilSum / samples / 4095.0 * 100 * 2.3), 100.0);
+  data.waterLevel = min((waterSum / samples / 4095.0 * 100 * 2.5), 100.0);
+  data.steam = steamSum / samples / 4095.0 * 100;
+  data.lightLevel = lightSum / samples;
+  
+  return data;
+}
+
+/* ============================================================
+   JSON BUILDERS
+   ============================================================ */
+String getSensorDataHTML() {
+  SensorData data = readAllSensors();
+  
+  String html = "<h3>📊 Live Sensors</h3>";
+  html += "🌡️ Temp: " + String(data.temperature, 1) + "°C<br/>";
+  html += "💧 Humidity: " + String(data.humidity, 1) + "%<br/>";
+  html += "🌱 Soil: " + String(data.soilMoisture, 1) + "%<br/>";
+  html += "💦 Water: " + String(data.waterLevel, 1) + "%<br/>";
+  html += "☁️ Steam: " + String(data.steam, 1) + "%<br/>";
+  html += "☀️ Light: " + String(data.lightLevel);
+  
+  return html;
+}
+
+String getSensorDataJSON() {
+  SensorData data = readAllSensors();
+  
+  StaticJsonDocument<256> doc;
+  doc["temp"] = data.temperature;
+  doc["hum"] = data.humidity;
+  doc["soil"] = data.soilMoisture;
+  doc["water"] = data.waterLevel;
+  doc["steam"] = data.steam;
+  doc["light"] = data.lightLevel;
+  doc["ip"] = WiFi.localIP().toString();
+  
+  String output;
+  serializeJson(doc, output);
+  return output;
+}
+
+JsonDocument createAPIPayload() {
+  SensorData data = readAllSensors();
+  
+  JsonDocument doc;
+  doc["device_id"] = DEVICE_ID;
+  doc["timestamp"] = millis();
+  
+  JsonArray readings = doc["readings"].to<JsonArray>();
+  
+  JsonObject temp = readings.add<JsonObject>();
+  temp["metric"] = "temperature";
+  temp["value"] = data.temperature;
+  
+  JsonObject hum = readings.add<JsonObject>();
+  hum["metric"] = "humidity";
+  hum["value"] = data.humidity;
+  
+  JsonObject soil = readings.add<JsonObject>();
+  soil["metric"] = "soil_moisture";
+  soil["value"] = data.soilMoisture;
+  
+  JsonObject light = readings.add<JsonObject>();
+  light["metric"] = "light_level";
+  light["value"] = data.lightLevel;
+  
+  JsonObject water = readings.add<JsonObject>();
+  water["metric"] = "water_level";
+  water["value"] = data.waterLevel;
+  
+  JsonObject steam = readings.add<JsonObject>();
+  steam["metric"] = "steam";
+  steam["value"] = data.steam;
+  
+  // Add device status
+  JsonObject status = doc["status"].to<JsonObject>();
+  status["led"] = ledState;
+  status["fan"] = fanState;
+  status["servo"] = servoState;
+  status["wifi_rssi"] = WiFi.RSSI();
+  status["uptime"] = millis() / 1000;
+  
+  return doc;
+}
+
+/* ============================================================
+   COMMAND EXECUTION
+   ============================================================ */
+void executeAction(String action, int duration_ms = 3000) {
+  Serial.printf("⚡ Executing: %s (duration: %dms)\n", action.c_str(), duration_ms);
+  
+  if (action == "water" || action == "D") {
+    digitalWrite(RELAYPIN, HIGH);
+    delay(duration_ms);
+    digitalWrite(RELAYPIN, LOW);
+    Serial.println("✅ Water pump executed");
+  }
+  else if (action == "fan" || action == "B") {
+    fanState = !fanState;
+    if (fanState) {
+      digitalWrite(FANPIN1, HIGH);
+      digitalWrite(FANPIN2, LOW);
+    } else {
+      digitalWrite(FANPIN1, LOW);
+      digitalWrite(FANPIN2, LOW);
+    }
+    Serial.printf("✅ Fan %s\n", fanState ? "ON" : "OFF");
+  }
+  else if (action == "light" || action == "A") {
+    ledState = !ledState;
+    digitalWrite(LEDPIN, ledState ? HIGH : LOW);
+    Serial.printf("✅ Light %s\n", ledState ? "ON" : "OFF");
+  }
+  else if (action == "feed" || action == "C") {
+    servoState = !servoState;
+    myservo.write(servoState ? 80 : 180);
+    Serial.printf("✅ Feeder %s\n", servoState ? "OPEN" : "CLOSED");
+  }
+  else {
+    Serial.printf("⚠️ Unknown action: %s\n", action.c_str());
+  }
+}
+
+/* ============================================================
+   CLOUD API FUNCTIONS (ULTRA-OPTIMIZED)
+   ============================================================ */
+void sendSensorData() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("❌ WiFi disconnected");
+    return;
+  }
+  
+  HTTPClient http;
+  http.setTimeout(2000); // 2s timeout for speed
+  http.setReuse(true);   // Keep connection alive
+  
+  String url = String(API_BASE) + "/sensors";
+  
+  if (!http.begin(url)) {
+    apiFailures++;
+    return;
+  }
+  
+  http.addHeader("Content-Type", "application/json");
+  
+  JsonDocument doc = createAPIPayload();
+  String payload;
+  serializeJson(doc, payload);
+  
+  int code = http.POST(payload);
+  
+  if (code > 0) {
+    Serial.printf("📤 Sensors sent → HTTP %d\n", code);
+    apiFailures = 0; // Reset on success
+  } else {
+    apiFailures++;
+    Serial.printf("❌ POST failed: %s\n", http.errorToString(code).c_str());
+  }
+  
+  http.end();
+  
+  // Failsafe: If too many failures, restart
+  if (apiFailures >= MAX_API_FAILURES) {
+    Serial.println("🔄 Too many API failures, restarting...");
+    ESP.restart();
+  }
+}
+
+void checkCommands() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  
+  HTTPClient http;
+  http.setTimeout(1500); // Fast timeout for commands
+  http.setReuse(true);
+  
+  String url = String(API_BASE) + "/commands?device_id=" + DEVICE_ID + "&status=pending";
+  
+  if (!http.begin(url)) return;
+  
+  int code = http.GET();
+  
+  if (code == 200) {
+    String payload = http.getString();
+    JsonDocument doc;
+    
+    DeserializationError error = deserializeJson(doc, payload);
+    if (error) {
+      Serial.printf("❌ JSON parse: %s\n", error.c_str());
+      http.end();
+      return;
+    }
+    
+    JsonArray cmds = doc.as<JsonArray>();
+    
+    if (cmds.size() > 0) {
+      Serial.printf("📥 Got %d command(s)\n", cmds.size());
+      
+      for (JsonObject cmd : cmds) {
+        int id = cmd["id"];
+        JsonObject command = cmd["command"];
+        String action = command["action"].as<String>();
+        int duration = command["duration_ms"] | 3000;
+        
+        executeAction(action, duration);
+        acknowledgeCommand(id);
+      }
+    }
+  }
+  
+  http.end();
+}
+
+void acknowledgeCommand(int id) {
+  HTTPClient http;
+  String url = String(API_BASE) + "/commands";
+  
+  if (!http.begin(url)) return;
+  
+  http.addHeader("Content-Type", "application/json");
+  
+  StaticJsonDocument<128> doc;
+  doc["command_id"] = id;
+  doc["status"] = "completed";
+  doc["device_id"] = DEVICE_ID;
+  
+  String payload;
+  serializeJson(doc, payload);
+  
+  int code = http.PATCH(payload);
+  Serial.printf("✅ Command %d ACK → %d\n", id, code);
+  
+  http.end();
+}
+
+/* ============================================================
+   LOCAL WEB SERVER HANDLERS
+   ============================================================ */
+void handleRoot(AsyncWebServerRequest *request) {
+  request->send_P(200, "text/html", index_html);
+}
+
+void handleData(AsyncWebServerRequest *request) {
+  request->send(200, "application/json", getSensorDataJSON());
+}
+
+void handleCommand(AsyncWebServerRequest *request) {
+  if (request->hasParam("action")) {
+    String action = request->getParam("action")->value();
+    executeAction(action, 3000);
+    request->send(200, "text/plain", "OK");
+  } else {
+    request->send(400, "text/plain", "Missing action");
+  }
+}
+
+void handleNotFound(AsyncWebServerRequest *request) {
+  request->send(404, "text/plain", "Not Found");
+}
+
+/* ============================================================
+   LCD UPDATE
+   ============================================================ */
+void updateLCD() {
+  SensorData data = readAllSensors();
+  
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("T:");
+  lcd.print(data.temperature, 1);
+  lcd.print("C H:");
+  lcd.print(data.humidity, 0);
+  lcd.print("%");
+  
+  lcd.setCursor(0, 1);
+  lcd.print("S:");
+  lcd.print(data.soilMoisture, 0);
+  lcd.print("% W:");
+  lcd.print(data.waterLevel, 0);
+  lcd.print("%");
+}
+
+/* ============================================================
+   WIFI CONNECTION
+   ============================================================ */
+bool connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(SSID, PASS);
+  
+  Serial.print("Connecting to WiFi");
+  wifiRetries = 0;
+  
+  while (WiFi.status() != WL_CONNECTED && wifiRetries < MAX_WIFI_RETRIES * 10) {
+    delay(500);
+    Serial.print(".");
+    wifiRetries++;
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\n✅ WiFi Connected!");
+    Serial.printf("📍 IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("📶 Signal: %d dBm\n", WiFi.RSSI());
+    return true;
+  }
+  
+  Serial.println("\n❌ WiFi connection failed!");
+  return false;
+}
+
+/* ============================================================
+   SETUP
+   ============================================================ */
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  
+  Serial.println("\n\n");
+  Serial.println("╔═══════════════════════════════╗");
+  Serial.println("║   🌿 SMART FARM SYSTEM v2.0  ║");
+  Serial.println("╚═══════════════════════════════╝\n");
+  
+  // Pin initialization
+  Serial.println("🔧 Initializing pins...");
+  pinMode(LEDPIN, OUTPUT);
+  pinMode(FANPIN1, OUTPUT);
+  pinMode(FANPIN2, OUTPUT);
+  pinMode(RELAYPIN, OUTPUT);
+  pinMode(STEAMPIN, INPUT);
+  pinMode(LIGHTPIN, INPUT);
+  pinMode(SOILHUMIDITYPIN, INPUT);
+  pinMode(WATERLEVELPIN, INPUT);
+  
+  // Set initial states
+  digitalWrite(LEDPIN, LOW);
+  digitalWrite(FANPIN1, LOW);
+  digitalWrite(FANPIN2, LOW);
+  digitalWrite(RELAYPIN, LOW);
+  
+  // Servo setup
+  Serial.println("🔧 Initializing servo...");
+  myservo.attach(SERVOPIN);
+  myservo.write(180); // Closed position
+  delay(500);
+  
+  // LCD setup
+  Serial.println("🔧 Initializing LCD...");
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Smart Farm v2.0");
+  lcd.setCursor(0, 1);
+  lcd.print("Initializing...");
+  
+  // WiFi connection
+  Serial.println("🔧 Connecting to WiFi...");
+  if (connectWiFi()) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("WiFi Connected!");
+    lcd.setCursor(0, 1);
+    lcd.print(WiFi.localIP());
+    
+    // Web server setup
+    Serial.println("🔧 Starting web server...");
+    server.on("/", HTTP_GET, handleRoot);
+    server.on("/data", HTTP_GET, handleData);
+    server.on("/cmd", HTTP_GET, handleCommand);
+    server.onNotFound(handleNotFound);
+    server.begin();
+    
+    Serial.println("✅ Web server started!");
+    Serial.printf("🌐 Access at: http://%s\n", WiFi.localIP().toString().c_str());
+    
+    systemReady = true;
+  } else {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("WiFi Failed!");
+    lcd.setCursor(0, 1);
+    lcd.print("Local Mode");
+    
+    systemReady = false;
+  }
+  
+  delay(2000);
+  
+  Serial.println("\n✅ System Ready!");
+  Serial.println("==========================================\n");
+}
+
+/* ============================================================
+   MAIN LOOP (ULTRA-OPTIMIZED)
+   ============================================================ */
+void loop() {
+  unsigned long now = millis();
+  
+  // WiFi reconnection check
+  if (WiFi.status() != WL_CONNECTED) {
+    if (now - lastHeartbeat >= heartbeatInterval) {
+      Serial.println("🔄 WiFi disconnected, reconnecting...");
+      connectWiFi();
+      lastHeartbeat = now;
+    }
+    delay(100);
+    return;
+  }
+  
+  // Send sensor data to cloud
+  if (systemReady && now - lastSensorSend >= sensorInterval) {
+    sendSensorData();
+    lastSensorSend = now;
+  }
+  
+  // Check for commands (FAST - 1s interval)
+  if (systemReady && now - lastCommandCheck >= commandInterval) {
+    checkCommands();
+    lastCommandCheck = now;
+  }
+  
+  // Update LCD display
+  if (now - lastLCDUpdate >= lcdUpdateInterval) {
+    updateLCD();
+    lastLCDUpdate = now;
+  }
+  
+  // Small delay to prevent watchdog issues
+  delay(10);
+}
+
+/* ============================================================
+   END OF CODE
+   ============================================================ */
