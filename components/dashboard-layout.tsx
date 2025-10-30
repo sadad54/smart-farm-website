@@ -54,14 +54,14 @@ const navItems = [
     href: "/scenario-1",
     image:
       "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Asset%20158%404x-gz6GEwkSfwHKns4nMIBQhoih1di13q.png",
-          activeImage:"SMART FARM/navbar_selcted/Asset27@4x.png"
+          activeImage:"SMART FARM/navbar_selcted/Asset36@4x.png"
   },
   {
     label: "Scenario 2",
     href: "/scenario-2",
     image:
       "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Asset%20157%404x-qAHRHqBsYJ1UvtMoNdjbnFPhfih4Ef.png",
-          activeImage:"SMART FARM/navbar_selcted/Asset26@4x.png"
+          activeImage:"SMART FARM/navbar_selcted/Asset35@4x.png"
   },
 ]
 

@@ -29,15 +29,22 @@ export default function SelectPage() {
         src="/SMART FARM/page 2/4x/Asset 16@4x.png"
         alt="Selection Background"
         fill
-        className="object-cover"
+        className="object-cover object-top"
+        // slightly shift focus downward to protect top/logo, and tiny scale to avoid 1px gaps
+        style={{ objectPosition: '50% 25%', transform: 'scale(1.01)', transformOrigin: '50% 25%' }}
         priority
       />
 
       {/* Robot buttons */}
       <div className="relative z-10 flex min-h-screen items-center justify-center px-4 pt-32">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-12 max-w-6xl w-full">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-12 max-w-6xl w-full mt-25">
           {options.map((option) => (
-            <Link key={option.title} href={option.href}>
+            <Link
+              key={option.title}
+              href={`/welcome?next=${encodeURIComponent(
+                option.href && option.href !== "#" ? option.href : "/dashboard"
+              )}`}
+            >
               <div className="group flex flex-col items-center cursor-pointer transition-transform duration-300 hover:scale-110">
                 <div className="relative w-64 h-64 drop-shadow-2xl transition-all duration-300 group-hover:brightness-110 group-hover:drop-shadow-[0_0_30px_rgba(0,200,255,0.6)]">
                   <Image
