@@ -1,10 +1,14 @@
+"use client"
+
 import Image from "next/image"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { Card } from "@/components/ui/card"
+import { useEspContext } from "@/components/EspProvider"
 import MotionLogCard from "@/components/ui/MotionLogCard"
 import MotionSensorCard from "@/components/ui/MtionSensorCard"
 
 export default function MotionPage() {
+  const { sendCommand } = useEspContext()
   const motionLog = [
     {
       type: "chicken",
@@ -51,7 +55,7 @@ export default function MotionPage() {
           </div>
         {/* Scarecrow button: public/images/buttons/scarecrow-button.png */}
         <div className="absolute bottom-40 right-120">
-          <div className="absolute w-114 h-34 hover:scale-105 transition-transform cursor-pointer">
+          <div className="absolute w-114 h-34 hover:scale-105 transition-transform cursor-pointer" onClick={() => sendCommand('B')}>
             <Image src="SMART FARM/PAGE 8/4x/Asset 112@4x.png" alt="Scarecrow Button" fill className="object-contain" />
           </div>
         </div>

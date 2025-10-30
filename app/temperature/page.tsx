@@ -1,8 +1,12 @@
+"use client"
+
 import Image from "next/image"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { Card } from "@/components/ui/card"
+import { useEspContext } from "@/components/EspProvider"
 
 export default function TemperaturePage() {
+  const { sendCommand } = useEspContext()
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -56,7 +60,7 @@ export default function TemperaturePage() {
 
         {/* Run Fan button: public/images/buttons/run-fan-button.png */}
         <div className="absolute bottom-[-200px] right-10 ">
-          <div className="relative w-84 h-30 hover:scale-105 transition-transform cursor-pointer">
+          <div className="relative w-84 h-30 hover:scale-105 transition-transform cursor-pointer" onClick={() => sendCommand('B')}>
             <Image src="SMART FARM/PAGE 9/4x/Asset 124@4x.png" alt="Run Fan Button" fill className="object-contain" />
           </div>
         </div>

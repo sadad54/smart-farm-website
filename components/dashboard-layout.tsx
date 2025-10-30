@@ -5,6 +5,7 @@ import Image from "next/image"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
+import { useEspContext } from "@/components/EspProvider"
 
 const navItems = [
   {
@@ -67,6 +68,7 @@ const navItems = [
 
 export function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
+  const { connected } = useEspContext()
 
   return (
     <div className="relative min-h-screen w-full overflow-hidden">
@@ -191,6 +193,12 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
         className="object-contain"
         priority
       />
+    </div>
+
+    {/* ESP Connection Status */}
+    <div className="flex items-center gap-3">
+      <span className={`inline-block w-3 h-3 rounded-full ${connected ? "bg-green-400" : "bg-red-500"}`} />
+      <span className="text-sm text-white/80">{connected ? "ESP Online" : "ESP Offline"}</span>
     </div>
 
     {/* Center Wooden Banner */}

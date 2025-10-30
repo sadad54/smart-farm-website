@@ -4,6 +4,7 @@ import { Geist, Geist_Mono } from "next/font/google"
 import { Analytics } from "@vercel/analytics/next"
 import { Poppins } from "next/font/google"
 import "./globals.css"
+import EspProvider from "@/components/EspProvider"
 
 const poppins = Poppins({
   subsets: ["latin"],
@@ -28,7 +29,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`font-sans antialiased`}>
-        {children}
+        <EspProvider>
+          {children}
+        </EspProvider>
         <Analytics />
       </body>
     </html>

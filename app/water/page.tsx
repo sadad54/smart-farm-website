@@ -1,8 +1,12 @@
+"use client"
+
 import Image from "next/image"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { Card } from "@/components/ui/card"
+import { useEspContext } from "@/components/EspProvider"
 
 export default function WaterPage() {
+  const { sendCommand } = useEspContext()
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -22,7 +26,7 @@ export default function WaterPage() {
 
             {/* Buttons row under the robot image */}
             <div className="mt-6 flex gap-4">
-              <div className="absolute bottom-[5px] left-[60px] w-90 h-40 hover:scale-105 transition-transform cursor-pointer">
+              <div className="absolute bottom-[5px] left-[60px] w-90 h-40 hover:scale-105 transition-transform cursor-pointer" onClick={() => sendCommand('D')}>
                 <Image
                   src="/SMART FARM/PAGE 10/4x/Asset 138@4x.png"
                   alt="Button Asset 138"
@@ -30,7 +34,7 @@ export default function WaterPage() {
                   className="object-contain"
                 />
               </div>
-              <div className="absolute bottom-[5px] left-[440px] w-90 h-40 hover:scale-105 transition-transform cursor-pointer">
+              <div className="absolute bottom-[5px] left-[440px] w-90 h-40 hover:scale-105 transition-transform cursor-pointer" onClick={() => sendCommand('C')}>
                 <Image
                   src="/SMART FARM/PAGE 10/4x/Asset 179@4x.png"
                   alt="Button Asset 137"

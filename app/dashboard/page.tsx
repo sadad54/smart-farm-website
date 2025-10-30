@@ -1,4 +1,8 @@
+"use client"
+
 import Image from "next/image"
+import { useEffect } from "react"
+import { useEspContext } from "@/components/EspProvider"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { Card } from "@/components/ui/card"
 import { Poppins } from "next/font/google";
@@ -9,6 +13,12 @@ const poppins = Poppins({
 });
 
 export default function DashboardPage() {
+  const { state, connected, sendCommand } = useEspContext()
+
+  useEffect(() => {
+    // debug log
+    // console.log('ESP state', state, 'connected', connected)
+  }, [state, connected])
   return (
     <DashboardLayout>
       
@@ -127,7 +137,7 @@ export default function DashboardPage() {
       {/* Content Overlay */}
       <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
         {/* The icon is already in the background image, so we only need the value */}
-        <p className="text-2xl font-bold mt-20">3748</p>
+  <p className="text-2xl font-bold mt-20">{state.soilHumidity ?? "--"}</p>
       </div>
     </div>
   
@@ -143,7 +153,7 @@ export default function DashboardPage() {
       />
       
       <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
-        <p className="text-2xl font-bold mt-20">850</p>
+  <p className="text-2xl font-bold mt-20">{state.light ?? "--"}</p>
       </div>
     </div>
   
@@ -159,7 +169,7 @@ export default function DashboardPage() {
       />
       
       <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
-        <p className="text-2xl font-bold mt-20">21.6°c</p>
+  <p className="text-2xl font-bold mt-20">{state.temperature ? `${state.temperature}°c` : "--"}</p>
       </div>
     </div>
   
@@ -175,7 +185,7 @@ export default function DashboardPage() {
       />
       
       <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
-        <p className="text-2xl font-bold mt-20">65%</p>
+  <p className="text-2xl font-bold mt-20">{state.humidity ? `${state.humidity}%` : "--"}</p>
       </div>
     </div>
   
@@ -184,15 +194,15 @@ export default function DashboardPage() {
         <div className="flex gap-4 justify-center">
           {/* Water Plant button: public/images/buttons/water-plant-button.png */}
           <div className="relative w-56 h-20 hover:scale-105 transition-transform cursor-pointer">
-            <Image src="SMART FARM/PAGE 4/4x/Asset 59@4x.png" alt="Water Plant" fill className="object-contain" />
+            <Image src="SMART FARM/PAGE 4/4x/Asset 59@4x.png" alt="Water Plant" fill className="object-contain" onClick={() => sendCommand('D')} />
           </div>
           {/* Run Fan button: public/images/buttons/run-fan-button.png */}
           <div className="relative w-56 h-20 hover:scale-105 transition-transform cursor-pointer">
-            <Image src="SMART FARM/PAGE 4/4x/Asset 58@4x.png" alt="Run Fan" fill className="object-contain" />
+            <Image src="SMART FARM/PAGE 4/4x/Asset 58@4x.png" alt="Run Fan" fill className="object-contain" onClick={() => sendCommand('B')} />
           </div>
           {/* Toggle Light button: public/images/buttons/toggle-light-button.png */}
           <div className="relative w-56 h-20 hover:scale-105 transition-transform cursor-pointer">
-            <Image src="SMART FARM/PAGE 4/4x/Asset 57@4x.png" alt="Toggle Light" fill className="object-contain" />
+            <Image src="SMART FARM/PAGE 4/4x/Asset 57@4x.png" alt="Toggle Light" fill className="object-contain" onClick={() => sendCommand('A')} />
           </div>
         </div>
           {/* Farmer Robot Asset - positioned in bottom-right corner */}

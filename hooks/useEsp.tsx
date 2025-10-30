@@ -1,0 +1,113 @@
+"use client"
+
+import { useEffect, useRef, useState } from "react"
+
+export type EspState = {
+  temperature?: number | null
+  humidity?: number | null
+  waterLevel?: number | null
+  steam?: number | null
+  light?: number | null
+  soilHumidity?: number | null
+  raw?: string
+}
+
+const DEFAULT_POLL_INTERVAL = 1000
+
+export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
+  const [state, setState] = useState<EspState>({})
+  const [connected, setConnected] = useState(false)
+  const baseRef = useRef<string | null>(null)
+  const pollRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    baseRef.current = process.env.NEXT_PUBLIC_ESP_BASE_URL || null
+
+    let mounted = true
+
+    // Parser for the ESP /dht HTML-ish response
+    function parseDhtText(text: string): EspState {
+      const result: EspState = { raw: text }
+
+      // crude regexes to extract numbers after labels used in ESP code
+      const tempMatch = text.match(/Temperature:\s*<\/b>\s*<b>([0-9.\-]+)/i)
+      const humMatch = text.match(/Humidity:\s*<\/b>\s*<b>([0-9.\-]+)/i)
+      const waterMatch = text.match(/WaterLevel:\s*<\/b>\s*<b>([0-9.\-]+)/i)
+      const steamMatch = text.match(/Steam:\s*<\/b>\s*<b>([0-9.\-]+)/i)
+      const lightMatch = text.match(/Light:\s*<\/b>\s*<b>([0-9.\-]+)/i)
+      const soilMatch = text.match(/SoilHumidity:\s*<\/b>\s*<b>([0-9.\-]+)/i)
+
+      if (tempMatch) result.temperature = Number(tempMatch[1])
+      if (humMatch) result.humidity = Number(humMatch[1])
+      if (waterMatch) result.waterLevel = Number(waterMatch[1])
+      if (steamMatch) result.steam = Number(steamMatch[1])
+      if (lightMatch) result.light = Number(lightMatch[1])
+      if (soilMatch) result.soilHumidity = Number(soilMatch[1])
+
+      return result
+    }
+
+    // polling function
+    async function pollOnce() {
+      if (!mounted) return
+
+      const base = baseRef.current
+      if (!base) {
+        // mock data mode
+        setConnected(true)
+        setState((s) => ({
+          temperature: ((s.temperature ?? 21) as number) + (Math.random() - 0.5) * 0.2,
+          humidity: ((s.humidity ?? 60) as number) + (Math.random() - 0.5) * 1,
+          waterLevel: ((s.waterLevel ?? 61) as number),
+          light: ((s.light ?? 850) as number) + Math.round((Math.random() - 0.5) * 10),
+          soilHumidity: ((s.soilHumidity ?? 40) as number) + Math.round((Math.random() - 0.5) * 2),
+          raw: "mock"
+        }))
+        return
+      }
+
+      try {
+        const res = await fetch(`${base.replace(/\/$/, "")}/dht`, { cache: "no-store" })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const text = await res.text()
+        const parsed = parseDhtText(text)
+        setState(parsed)
+        setConnected(true)
+      } catch (err) {
+        // connection error - mark disconnected
+        setConnected(false)
+      }
+    }
+
+    // initial poll immediately
+    pollOnce()
+    // set interval
+    const id = window.setInterval(pollOnce, pollInterval)
+    pollRef.current = id
+
+    return () => {
+      mounted = false
+      if (pollRef.current) window.clearInterval(pollRef.current)
+    }
+  }, [pollInterval])
+
+  async function sendCommand(value: string) {
+    const base = process.env.NEXT_PUBLIC_ESP_BASE_URL || null
+    if (!base) {
+      // mock ack
+      console.log("[useEsp] mock sendCommand", value)
+      return { ok: true }
+    }
+
+    try {
+      const res = await fetch(`${base.replace(/\/$/, "")}/set?value=${encodeURIComponent(value)}`)
+      return { ok: res.ok, status: res.status }
+    } catch (err) {
+      return { ok: false, error: String(err) }
+    }
+  }
+
+  return { state, connected, sendCommand }
+}
+
+export default useEsp
