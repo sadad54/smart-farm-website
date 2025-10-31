@@ -14,8 +14,8 @@
 #include <ESP32_Servo.h>
 
 /* ---------------- WIFI CONFIG ---------------- */
-const char* SSID = "DEV_WIFI";        // ⚠️ CHANGE THIS
-const char* PASS = "1qaz2wsx!";    // ⚠️ CHANGE THIS
+const char* SSID = "DE-Peplink";        // ⚠️ CHANGE THIS
+const char* PASS = "Dream2025!";    // ⚠️ CHANGE THIS
 
 /* ---- API Configuration ---- */
 const char* API_BASE  = "https://smart-farm-website-gamma.vercel.app/api";  // ⚠️ CHANGE THIS
