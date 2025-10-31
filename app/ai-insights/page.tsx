@@ -133,7 +133,7 @@ export default function AIInsightsPage() {
         .select('*')
         .eq('device_id', 'farm_001')
         .order('timestamp', { ascending: false })
-        .limit(50)
+        .limit(200) // Increased from 50 to 200 for longer time period
 
       if (error) throw error
 
@@ -153,7 +153,7 @@ export default function AIInsightsPage() {
         groupedData[time][reading.metric] = reading.value
       })
 
-      const chartPoints = Object.values(groupedData).reverse().slice(-20)
+      const chartPoints = Object.values(groupedData).reverse().slice(-60) // Increased from 20 to 60 data points
       setChartData(chartPoints)
     } catch (error) {
       console.error('Error fetching sensor data:', error)
@@ -243,35 +243,94 @@ export default function AIInsightsPage() {
             AI Insights
           </h2>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Real-time Swipeable Charts Card */}
-            <Card className="bg-pink-200/90 backdrop-blur-sm rounded-3xl p-6 border-4 border-pink-400 h-[500px]">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className={`${poppins.className} text-2xl font-bold text-purple-900`}>
-                  Plant Health Analytics
-                </h3>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={prevChart}
-                    className="p-2 bg-purple-100 hover:bg-purple-200 rounded-full transition-colors"
-                    disabled={loading}
-                  >
-                    <ChevronLeft className="w-5 h-5 text-purple-800" />
-                  </button>
-                  <span className="text-sm text-purple-700 font-medium px-2">
-                    {currentChartIndex + 1} / {chartConfigs.length}
-                  </span>
-                  <button
-                    onClick={nextChart}
-                    className="p-2 bg-purple-100 hover:bg-purple-200 rounded-full transition-colors"
-                    disabled={loading}
-                  >
-                    <ChevronRight className="w-5 h-5 text-purple-800" />
-                  </button>
+          {/* Plant Health Card - Contains both charts and dashboard cards */}
+          <Card className="bg-pink-200/90 backdrop-blur-sm rounded-3xl p-6 border-4 border-pink-400">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className={`${poppins.className} text-2xl font-bold text-purple-900`}>
+                Plant Health Analytics
+              </h3>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={prevChart}
+                  className="p-2 bg-purple-100 hover:bg-purple-200 rounded-full transition-colors"
+                  disabled={loading}
+                >
+                  <ChevronLeft className="w-5 h-5 text-purple-800" />
+                </button>
+                <span className="text-sm text-purple-700 font-medium px-2">
+                  {currentChartIndex + 1} / {chartConfigs.length}
+                </span>
+                <button
+                  onClick={nextChart}
+                  className="p-2 bg-purple-100 hover:bg-purple-200 rounded-full transition-colors"
+                  disabled={loading}
+                >
+                  <ChevronRight className="w-5 h-5 text-purple-800" />
+                </button>
+              </div>
+            </div>
+
+            {/* Real-time Dashboard Cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+              {/* Temperature Card */}
+              <div className="bg-white/90 rounded-xl p-4 border-2 border-red-200">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-3 h-3 rounded-full bg-red-500" />
+                  <span className="text-sm font-semibold text-red-800">Temperature</span>
                 </div>
+                <p className="text-2xl font-bold text-red-900">
+                  {state.temperature !== undefined && state.temperature !== null && state.temperature !== -999 
+                    ? `${state.temperature.toFixed(1)}°C` 
+                    : 'N/A'}
+                </p>
+                <p className="text-xs text-red-600 mt-1">Current reading</p>
               </div>
 
-              <div className="bg-white/90 rounded-2xl p-6 h-[420px]">
+              {/* Humidity Card */}
+              <div className="bg-white/90 rounded-xl p-4 border-2 border-blue-200">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-3 h-3 rounded-full bg-blue-500" />
+                  <span className="text-sm font-semibold text-blue-800">Humidity</span>
+                </div>
+                <p className="text-2xl font-bold text-blue-900">
+                  {state.humidity !== undefined && state.humidity !== null && state.humidity !== -999 
+                    ? `${state.humidity.toFixed(1)}%` 
+                    : 'N/A'}
+                </p>
+                <p className="text-xs text-blue-600 mt-1">Air moisture</p>
+              </div>
+
+              {/* Soil Moisture Card */}
+              <div className="bg-white/90 rounded-xl p-4 border-2 border-green-200">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-3 h-3 rounded-full bg-green-500" />
+                  <span className="text-sm font-semibold text-green-800">Soil Moisture</span>
+                </div>
+                <p className="text-2xl font-bold text-green-900">
+                  {state.soilHumidity !== undefined && state.soilHumidity !== null && state.soilHumidity !== -999 
+                    ? `${state.soilHumidity.toFixed(1)}%` 
+                    : 'N/A'}
+                </p>
+                <p className="text-xs text-green-600 mt-1">Soil health</p>
+              </div>
+
+              {/* Light Level Card */}
+              <div className="bg-white/90 rounded-xl p-4 border-2 border-yellow-200">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-3 h-3 rounded-full bg-yellow-500" />
+                  <span className="text-sm font-semibold text-yellow-800">Light Level</span>
+                </div>
+                <p className="text-2xl font-bold text-yellow-900">
+                  {state.light !== undefined && state.light !== null && state.light !== -999 
+                    ? `${state.light.toFixed(1)}%` 
+                    : 'N/A'}
+                </p>
+                <p className="text-xs text-yellow-600 mt-1">Brightness</p>
+              </div>
+            </div>
+
+            {/* Charts Section */}
+            <div className="bg-white/90 rounded-2xl p-6 h-[420px]">
                 {loading ? (
                   <div className="flex items-center justify-center h-full">
                     <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-purple-600"></div>
@@ -331,8 +390,8 @@ export default function AIInsightsPage() {
               </div>
             </Card>
 
-            {/* AI Analytics Card */}
-            <Card className="bg-gradient-to-br from-blue-100 to-indigo-200 backdrop-blur-sm rounded-3xl p-6 border-4 border-indigo-400 h-[500px]">
+          {/* AI Analytics Card */}
+          <Card className="bg-gradient-to-br from-blue-100 to-indigo-200 backdrop-blur-sm rounded-3xl p-6 border-4 border-indigo-400 h-[500px]">
               <div className="flex items-center gap-3 mb-4">
                 <div className="p-3 bg-indigo-600 rounded-full">
                   <Brain className="w-8 h-8 text-white" />

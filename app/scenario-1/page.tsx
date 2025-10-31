@@ -31,7 +31,7 @@ export default function Scenario1Page() {
     // Use real ultrasonic sensor data from ESP32
     if (state.distance !== undefined && state.distance !== null && state.distance !== -1) {
       const currentDistance = state.distance
-      setDistance(currentDistance)
+      setDistance(currentDistance) // Update local state for UI display
       
       // Only detect if enough time has passed since last detection
       const now = Date.now()
@@ -58,10 +58,11 @@ export default function Scenario1Page() {
         }
       }
     } else {
-      // No valid sensor reading - reset to safe distance
-      setDistance(15)
+      // No valid sensor reading - reset to safe distance and clear detection
+      setDistance(50) // Use 50cm as fallback (safe distance)
       if (animalDetected) {
         setAnimalDetected(false)
+        console.log('🔧 Ultrasonic sensor offline - clearing detection')
       }
     }
   }, [state.distance, animalDetected, feedingMode, feedingCooldown, systemInitialized])
@@ -237,13 +238,17 @@ export default function Scenario1Page() {
                 </button>
               </div>
 
-              {/* Distance Display */}
+              {/* Distance Display - Real ESP32 data */}
               <div className="flex items-center justify-between">
-                <span className="font-semibold text-gray-800">Distance:</span>
+                <span className="font-semibold text-gray-800">Distance (ESP32):</span>
                 <span className={`font-bold text-lg ${
-                  animalDetected ? 'text-red-600' : 'text-gray-600'
+                  state.distance !== undefined && state.distance !== null && state.distance !== -1
+                    ? (state.distance >= 2 && state.distance <= 15 ? 'text-red-600 animate-pulse' : 'text-blue-600')
+                    : 'text-gray-500'
                 }`}>
-                  {distance.toFixed(1)} cm
+                  {state.distance !== undefined && state.distance !== null && state.distance !== -1 
+                    ? `${state.distance.toFixed(1)} cm` 
+                    : 'No Signal'}
                 </span>
               </div>
 
@@ -325,15 +330,23 @@ export default function Scenario1Page() {
                 <span className="text-gray-600 font-semibold">ACTIVE</span>
               </div>
 
-              {/* Detection Range */}
+              {/* Detection Range - Updated to use real ESP32 ultrasonic data */}
               <div className="mt-4">
                 <span className="font-semibold text-gray-800">Detection Range: 2-15 cm</span>
                 <div className="mt-2 w-full bg-gray-200 rounded-full h-4">
                   <div 
                     className={`h-4 rounded-full transition-all duration-500 ${
-                      animalDetected ? 'bg-red-500' : 'bg-blue-500'
+                      // Color based on real distance from ESP32 sensor
+                      state.distance !== undefined && state.distance !== null && state.distance !== -1
+                        ? (state.distance >= 2 && state.distance <= 15 ? 'bg-red-500 animate-pulse' : 'bg-blue-500')
+                        : 'bg-gray-400'
                     }`}
-                    style={{ width: `${Math.min((distance / 25) * 100, 100)}%` }}
+                    style={{ 
+                      // Use actual ESP32 distance data for progress bar width
+                      width: `${state.distance !== undefined && state.distance !== null && state.distance !== -1 
+                        ? Math.min((state.distance / 25) * 100, 100) 
+                        : 0}%` 
+                    }}
                   />
                 </div>
                 <div className="flex justify-between text-xs text-gray-500 mt-1">
@@ -341,6 +354,17 @@ export default function Scenario1Page() {
                   <span>2cm</span>
                   <span>15cm</span>
                   <span>25cm+</span>
+                </div>
+                <div className="text-center mt-2">
+                  <span className={`text-sm font-bold ${
+                    state.distance !== undefined && state.distance !== null && state.distance !== -1
+                      ? (state.distance >= 2 && state.distance <= 15 ? 'text-red-600' : 'text-blue-600')
+                      : 'text-gray-500'
+                  }`}>
+                    Real-time: {state.distance !== undefined && state.distance !== null && state.distance !== -1 
+                      ? `${state.distance.toFixed(1)} cm` 
+                      : 'No Signal'}
+                  </span>
                 </div>
               </div>
             </div>
@@ -436,9 +460,13 @@ export default function Scenario1Page() {
                 <div>
                   <span className="text-purple-700">Detection Zone:</span>
                   <span className={`ml-2 font-semibold ${
-                    distance >= 2 && distance <= 7 ? 'text-red-600' : 'text-green-600'
+                    state.distance !== undefined && state.distance !== null && state.distance !== -1
+                      ? (state.distance >= 2 && state.distance <= 15 ? 'text-red-600' : 'text-green-600')
+                      : 'text-gray-500'
                   }`}>
-                    {distance >= 2 && distance <= 7 ? '🚨 In Range' : '🟢 Clear'}
+                    {state.distance !== undefined && state.distance !== null && state.distance !== -1
+                      ? (state.distance >= 2 && state.distance <= 15 ? '🚨 In Range' : '🟢 Clear')
+                      : '⚠️ No Data'}
                   </span>
                 </div>
                 <div>
