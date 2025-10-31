@@ -37,8 +37,9 @@ export default function Scenario1Page() {
       const now = Date.now()
       if (now - detectionCooldownRef.current > 3000) { // 3 second minimum between detections
         
-        // Animal detection logic: 2-7cm range indicates animal presence
-        if (currentDistance >= 2 && currentDistance <= 7) {
+        // Animal detection logic: Expanded range for better detection
+        // Close range: 2-15cm indicates animal presence (more realistic)
+        if (currentDistance >= 2 && currentDistance <= 15) {
           if (!animalDetected && !feedingCooldown) {
             setAnimalDetected(true)
             detectionCooldownRef.current = now
@@ -50,7 +51,7 @@ export default function Scenario1Page() {
           }
         } else {
           // Animal moved away or out of range
-          if (animalDetected && currentDistance > 7) {
+          if (animalDetected && currentDistance > 20) {
             setAnimalDetected(false)
             console.log(`🚪 Animal left detection zone - Distance: ${currentDistance.toFixed(1)}cm`)
           }
@@ -326,20 +327,20 @@ export default function Scenario1Page() {
 
               {/* Detection Range */}
               <div className="mt-4">
-                <span className="font-semibold text-gray-800">Detection Range: 2-7 cm</span>
+                <span className="font-semibold text-gray-800">Detection Range: 2-15 cm</span>
                 <div className="mt-2 w-full bg-gray-200 rounded-full h-4">
                   <div 
                     className={`h-4 rounded-full transition-all duration-500 ${
                       animalDetected ? 'bg-red-500' : 'bg-blue-500'
                     }`}
-                    style={{ width: `${Math.min((distance / 15) * 100, 100)}%` }}
+                    style={{ width: `${Math.min((distance / 25) * 100, 100)}%` }}
                   />
                 </div>
                 <div className="flex justify-between text-xs text-gray-500 mt-1">
                   <span>0cm</span>
                   <span>2cm</span>
-                  <span>7cm</span>
-                  <span>15cm+</span>
+                  <span>15cm</span>
+                  <span>25cm+</span>
                 </div>
               </div>
             </div>
@@ -469,7 +470,7 @@ export default function Scenario1Page() {
                 </div>
                 <h4 className="font-bold text-gray-800 mb-2">1. Detection</h4>
                 <p className="text-sm text-gray-600">
-                  HC-SR04 ultrasonic sensor measures distance to detect animals within 2-7cm range
+                  HC-SR04 ultrasonic sensor measures distance to detect animals within 2-15cm range
                 </p>
               </div>
               

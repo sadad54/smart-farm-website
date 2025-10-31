@@ -149,30 +149,56 @@ struct SensorData {
 
 /* ---------------- ULTRASONIC SENSOR FUNCTION ---------------- */
 float readUltrasonicDistance() {
-  // Clear the trigPin
-  digitalWrite(TRIGPIN, LOW);
-  delayMicroseconds(2);
+  // Take multiple readings for better accuracy
+  float validReadings[3];
+  int validCount = 0;
   
-  // Set the trigPin high for 10 microseconds
-  digitalWrite(TRIGPIN, HIGH);
-  delayMicroseconds(10);
-  digitalWrite(TRIGPIN, LOW);
-  
-  // Read the echoPin, returns the sound wave travel time in microseconds
-  unsigned long duration = pulseIn(ECHOPIN, HIGH, 30000); // 30ms timeout
-  
-  // Calculate distance in cm (speed of sound = 343 m/s)
-  // Distance = (duration * 0.034) / 2
-  float distance = (duration * 0.034) / 2;
-  
-  // Validate reading (HC-SR04 range: 2cm - 400cm)
-  if (duration == 0 || distance < 2 || distance > 400) {
-    Serial.println("⚠️ Ultrasonic sensor reading error or out of range");
-    return -1; // Invalid reading
+  for (int i = 0; i < 3; i++) {
+    // Clear the trigPin
+    digitalWrite(TRIGPIN, LOW);
+    delayMicroseconds(2);
+    
+    // Set the trigPin high for 10 microseconds
+    digitalWrite(TRIGPIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIGPIN, LOW);
+    
+    // Read the echoPin, returns the sound wave travel time in microseconds
+    unsigned long duration = pulseIn(ECHOPIN, HIGH, 25000); // 25ms timeout (reduced for faster readings)
+    
+    // Calculate distance in cm (speed of sound = 343 m/s)
+    // Distance = (duration * 0.034) / 2
+    float distance = (duration * 0.034) / 2;
+    
+    // Validate reading (HC-SR04 range: 2cm - 400cm)
+    if (duration > 0 && distance >= 1 && distance <= 300) { // Relaxed range
+      validReadings[validCount] = distance;
+      validCount++;
+    }
+    
+    delay(30); // Small delay between readings
   }
   
-  Serial.printf("📏 Ultrasonic - Duration: %lu μs, Distance: %.1f cm\n", duration, distance);
-  return distance;
+  if (validCount == 0) {
+    Serial.println("⚠️ Ultrasonic sensor: No valid readings - check wiring on pins 12 & 13");
+    return 50.0; // Return safe distance instead of -1 to keep system working
+  }
+  
+  // Calculate average of valid readings
+  float avgDistance = 0;
+  for (int i = 0; i < validCount; i++) {
+    avgDistance += validReadings[i];
+  }
+  avgDistance = avgDistance / validCount;
+  
+  Serial.printf("📏 Ultrasonic - Valid readings: %d/3, Average: %.1f cm\n", validCount, avgDistance);
+  
+  // Special debugging for animal detection range
+  if (avgDistance >= 1 && avgDistance <= 15) {
+    Serial.printf("🚨 DETECTION ZONE: %.1f cm - Animal detection possible!\n", avgDistance);
+  }
+  
+  return avgDistance;
 }
 
 SensorData readAllSensors() {
