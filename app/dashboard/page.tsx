@@ -1,7 +1,7 @@
 "use client"
 
 import Image from "next/image"
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 import { useEspContext } from "@/components/EspProvider"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { Card } from "@/components/ui/card"
@@ -14,11 +14,123 @@ const poppins = Poppins({
 
 export default function DashboardPage() {
   const { state, connected, sendCommand } = useEspContext()
+  const lastHealthLogRef = useRef<number>(0)
+
+  // Function to round values to nearest 0.5
+  const roundToHalf = (value: number): string => {
+    return (Math.round(value * 2) / 2).toFixed(1)
+  }
+
+  // Function to display sensor value with error handling
+  const displaySensorValue = (value: number | null | undefined, unit: string, fallback: string = "--"): string => {
+    if (value === undefined || value === null || value === -999) {
+      return fallback
+    }
+    return `${roundToHalf(value)}${unit}`
+  }
+
+  // Calculate plant health percentage based on multiple factors
+  const calculatePlantHealth = (): number => {
+    const soil = state.soilHumidity || 0
+    const temp = state.temperature || 0
+    const humidity = state.humidity || 0
+    
+    // Optimal ranges for plant health
+    const optimalSoil = { min: 40, max: 80 }
+    const optimalTemp = { min: 20, max: 30 }
+    const optimalHumidity = { min: 50, max: 80 }
+    
+    // Calculate health scores (0-100 each)
+    const soilScore = soil >= optimalSoil.min && soil <= optimalSoil.max ? 100 : 
+                     Math.max(0, 100 - Math.abs(soil - ((optimalSoil.min + optimalSoil.max) / 2)) * 2)
+    
+    const tempScore = temp >= optimalTemp.min && temp <= optimalTemp.max ? 100 : 
+                     Math.max(0, 100 - Math.abs(temp - ((optimalTemp.min + optimalTemp.max) / 2)) * 4)
+    
+    const humidityScore = humidity >= optimalHumidity.min && humidity <= optimalHumidity.max ? 100 : 
+                         Math.max(0, 100 - Math.abs(humidity - ((optimalHumidity.min + optimalHumidity.max) / 2)) * 2)
+    
+    // Weighted average (soil moisture is most important)
+    const plantHealth = Math.round((soilScore * 0.5) + (tempScore * 0.3) + (humidityScore * 0.2))
+    return Math.max(0, Math.min(100, plantHealth))
+  }
+
+  // Log plant health data to database (throttled to once per minute)
+  const logPlantHealthToDatabase = async (healthPercentage: number) => {
+    const now = Date.now()
+    if (now - lastHealthLogRef.current < 60000) return // Throttle to 1 minute
+    lastHealthLogRef.current = now
+
+    try {
+      const soil = state.soilHumidity || 0
+      const temp = state.temperature || 0
+      const humidity = state.humidity || 0
+      
+      // Calculate individual scores for logging
+      const optimalSoil = { min: 40, max: 80 }
+      const optimalTemp = { min: 20, max: 30 }
+      const optimalHumidity = { min: 50, max: 80 }
+      
+      const soilScore = soil >= optimalSoil.min && soil <= optimalSoil.max ? 100 : 
+                       Math.max(0, 100 - Math.abs(soil - ((optimalSoil.min + optimalSoil.max) / 2)) * 2)
+      const tempScore = temp >= optimalTemp.min && temp <= optimalTemp.max ? 100 : 
+                       Math.max(0, 100 - Math.abs(temp - ((optimalTemp.min + optimalTemp.max) / 2)) * 4)
+      const humidityScore = humidity >= optimalHumidity.min && humidity <= optimalHumidity.max ? 100 : 
+                           Math.max(0, 100 - Math.abs(humidity - ((optimalHumidity.min + optimalHumidity.max) / 2)) * 2)
+
+      await fetch('/api/plant-health', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          device_id: 'farm_001',
+          plant_health_percentage: healthPercentage,
+          soil_score: Math.round(soilScore),
+          temperature_score: Math.round(tempScore),
+          humidity_score: Math.round(humidityScore),
+          soil_moisture: soil,
+          temperature: temp,
+          humidity: humidity
+        })
+      })
+      console.log(`📊 Plant health logged: ${healthPercentage}%`)
+    } catch (error) {
+      console.error('Failed to log plant health data:', error)
+    }
+  }
+
+  // Get health status color for visual indicators
+  const getHealthStatusColor = (percentage: number): string => {
+    if (percentage >= 90) return "text-green-600 bg-green-100"
+    if (percentage >= 75) return "text-green-500 bg-green-50" 
+    if (percentage >= 60) return "text-yellow-600 bg-yellow-100"
+    if (percentage >= 40) return "text-orange-600 bg-orange-100"
+    return "text-red-600 bg-red-100"
+  }
+
+  // Get health progress bar color
+  const getHealthBarColor = (percentage: number): string => {
+    if (percentage >= 90) return "bg-green-500"
+    if (percentage >= 75) return "bg-green-400"
+    if (percentage >= 60) return "bg-yellow-400" 
+    if (percentage >= 40) return "bg-orange-400"
+    return "bg-red-400"
+  }
+
+  // Get actual water level percentage
+  const getWaterLevelPercentage = (): number => {
+    const waterLevel = state.waterLevel || 0
+    return Math.max(0, Math.min(100, Math.round(waterLevel)))
+  }
 
   useEffect(() => {
-    // debug log
-    // console.log('ESP state', state, 'connected', connected)
-  }, [state, connected])
+    // Log plant health data when sensor data changes (throttled internally)
+    if (connected && state.soilHumidity !== undefined && state.temperature !== undefined && state.humidity !== undefined) {
+      const healthPercentage = calculatePlantHealth()
+      if (healthPercentage > 0) { // Only log if we have valid data
+        logPlantHealthToDatabase(healthPercentage)
+      }
+    }
+  }, [state.soilHumidity, state.temperature, state.humidity, connected])
   return (
     <DashboardLayout>
       
@@ -63,15 +175,15 @@ export default function DashboardPage() {
             className="object-contain"
           />
 
-          <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 w-20 h-3 bg-green-200 rounded-full overflow-hidden border border-green-400 shadow-sm">
+          <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 w-20 h-3 bg-gray-200 rounded-full overflow-hidden border border-gray-300 shadow-sm">
             <div
-              className="h-full bg-green-400 rounded-full transition-all duration-500"
-              style={{ width: "70%" }}
+              className={`h-full rounded-full transition-all duration-500 ${getHealthBarColor(calculatePlantHealth())}`}
+              style={{ width: `${calculatePlantHealth()}%` }}
             />
           </div>
 
-          <p className="absolute bottom-1 left-1/2 transform -translate-x-1/2 text-base font-extrabold text-green-900 drop-shadow-sm">
-            70%
+          <p className={`absolute bottom-1 left-1/2 transform -translate-x-1/2 text-base font-extrabold drop-shadow-sm px-1 py-0.5 rounded-sm ${getHealthStatusColor(calculatePlantHealth())}`}>
+            {calculatePlantHealth()}%
           </p>
         </div>
       </div>
@@ -86,15 +198,21 @@ export default function DashboardPage() {
             className="object-contain"
           />
 
-          <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 w-20 h-3 bg-blue-200 rounded-full overflow-hidden border border-blue-400 shadow-sm">
+          <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 w-20 h-3 bg-gray-200 rounded-full overflow-hidden border border-gray-300 shadow-sm">
             <div
-              className="h-full bg-blue-500 rounded-full transition-all duration-500"
-              style={{ width: "61%" }}
+              className={`h-full rounded-full transition-all duration-500 ${
+                getWaterLevelPercentage() > 60 ? 'bg-blue-500' :
+                getWaterLevelPercentage() > 30 ? 'bg-yellow-500' : 'bg-red-500'
+              }`}
+              style={{ width: `${getWaterLevelPercentage()}%` }}
             />
           </div>
 
-          <p className="absolute bottom-1 left-1/2 transform -translate-x-1/2 text-base font-extrabold text-blue-900 drop-shadow-sm">
-            61%
+          <p className={`absolute bottom-1 left-1/2 transform -translate-x-1/2 text-base font-extrabold drop-shadow-sm px-1 py-0.5 rounded-sm ${
+            getWaterLevelPercentage() > 60 ? 'text-blue-600 bg-blue-100' :
+            getWaterLevelPercentage() > 30 ? 'text-yellow-600 bg-yellow-100' : 'text-red-600 bg-red-100'
+          }`}>
+            {getWaterLevelPercentage()}%
           </p>
         </div>
       </div>
@@ -137,7 +255,7 @@ export default function DashboardPage() {
       {/* Content Overlay */}
       <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
         {/* The icon is already in the background image, so we only need the value */}
-  <p className="text-2xl font-bold mt-20">{state.soilHumidity ?? "--"}</p>
+  <p className="text-2xl font-bold mt-20">{displaySensorValue(state.soilHumidity, "%")}</p>
       </div>
     </div>
   
@@ -153,7 +271,7 @@ export default function DashboardPage() {
       />
       
       <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
-  <p className="text-2xl font-bold mt-20">{state.light ?? "--"}</p>
+  <p className="text-2xl font-bold mt-20">{displaySensorValue(state.light, "%")}</p>
       </div>
     </div>
   
@@ -169,7 +287,7 @@ export default function DashboardPage() {
       />
       
       <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
-  <p className="text-2xl font-bold mt-20">{state.temperature ? `${state.temperature}°c` : "--"}</p>
+  <p className="text-2xl font-bold mt-20">{displaySensorValue(state.temperature, "°c")}</p>
       </div>
     </div>
   
@@ -185,7 +303,7 @@ export default function DashboardPage() {
       />
       
       <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
-  <p className="text-2xl font-bold mt-20">{state.humidity ? `${state.humidity}%` : "--"}</p>
+  <p className="text-2xl font-bold mt-20">{displaySensorValue(state.humidity, "%")}</p>
       </div>
     </div>
   
@@ -194,11 +312,11 @@ export default function DashboardPage() {
         <div className="flex gap-4 justify-center">
           {/* Water Plant button: public/images/buttons/water-plant-button.png */}
           <div className="relative w-56 h-20 hover:scale-105 transition-transform cursor-pointer">
-            <Image src="SMART FARM/PAGE 4/4x/Asset 59@4x.png" alt="Water Plant" fill className="object-contain" onClick={() => sendCommand('D')} />
+            <Image src="SMART FARM/PAGE 4/4x/Asset 59@4x.png" alt="Water Plant" fill className="object-contain" onClick={() => sendCommand('D', 'dashboard', { button_type: 'water_plant' })} />
           </div>
           {/* Run Fan button: public/images/buttons/run-fan-button.png */}
           <div className="relative w-56 h-20 hover:scale-105 transition-transform cursor-pointer">
-            <Image src="SMART FARM/PAGE 4/4x/Asset 58@4x.png" alt="Run Fan" fill className="object-contain" onClick={() => sendCommand('B')} />
+            <Image src="SMART FARM/PAGE 4/4x/Asset 58@4x.png" alt="Run Fan" fill className="object-contain" onClick={() => sendCommand('B', 'dashboard', { button_type: 'run_fan' })} />
           </div>
           {/* Toggle Light button: public/images/buttons/toggle-light-button.png */}
           <div className="relative w-56 h-20 hover:scale-105 transition-transform cursor-pointer">

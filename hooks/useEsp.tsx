@@ -19,9 +19,36 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
   const [connected, setConnected] = useState(false)
   const baseRef = useRef<string | null>(null)
   const pollRef = useRef<number | null>(null)
+  const lastLogRef = useRef<number>(0)
+
+  // Throttled logging to Supabase (max once per 10 seconds)
+  const logSensorDataToDatabase = async (sensorData: EspState) => {
+    const now = Date.now()
+    if (now - lastLogRef.current < 10000) return // Throttle to 10 seconds
+    lastLogRef.current = now
+
+    try {
+      await fetch('/api/sensor-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          device_id: 'farm_001',
+          temperature: sensorData.temperature,
+          humidity: sensorData.humidity,
+          soil_moisture: sensorData.soilHumidity,
+          water_level: sensorData.waterLevel,
+          light_level: sensorData.light,
+          steam: sensorData.steam
+        })
+      })
+    } catch (error) {
+      console.error('Failed to log sensor data:', error)
+    }
+  }
 
   useEffect(() => {
-    baseRef.current = process.env.NEXT_PUBLIC_ESP_BASE_URL || null
+  // Prefer proxy endpoints when available
+  baseRef.current = process.env.NEXT_PUBLIC_ESP_BASE_URL || null
 
     let mounted = true
 
@@ -67,12 +94,19 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
       }
 
       try {
-        const res = await fetch(`${base.replace(/\/$/, "")}/dht`, { cache: "no-store" })
+        // Try proxy first, then fall back to direct device URL
+        let res = await fetch(`/api/esp-dht`, { cache: "no-store" })
+        if (!res.ok) {
+          res = await fetch(`${base.replace(/\/$/, "")}/dht`, { cache: "no-store" })
+        }
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const text = await res.text()
         const parsed = parseDhtText(text)
         setState(parsed)
         setConnected(true)
+        
+        // Log sensor data to Supabase (throttled to avoid excessive API calls)
+        logSensorDataToDatabase(parsed)
       } catch (err) {
         // connection error - mark disconnected
         setConnected(false)
@@ -91,16 +125,59 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
     }
   }, [pollInterval])
 
-  async function sendCommand(value: string) {
+  async function sendCommand(value: string, location?: string, metadata?: any) {
     const base = process.env.NEXT_PUBLIC_ESP_BASE_URL || null
+    
+    // Map command to action type
+    const getActionType = (cmd: string) => {
+      switch(cmd.toUpperCase()) {
+        case 'A': return 'light'
+        case 'B': return 'fan'
+        case 'C': return 'feed'
+        case 'D': return 'water'
+        case 'E': return 'buzzer'
+        default: return 'unknown'
+      }
+    }
+
+    // Log action to database
+    const logAction = async () => {
+      try {
+        await fetch('/api/device-actions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            device_id: 'farm_001',
+            action_type: getActionType(value),
+            command: value.toUpperCase(),
+            location: location || 'unknown',
+            metadata: metadata || {}
+          })
+        })
+      } catch (error) {
+        console.error('Failed to log action:', error)
+      }
+    }
+
     if (!base) {
       // mock ack
       console.log("[useEsp] mock sendCommand", value)
+      await logAction()
       return { ok: true }
     }
 
     try {
-      const res = await fetch(`${base.replace(/\/$/, "")}/set?value=${encodeURIComponent(value)}`)
+      // Try proxy first, fall back to direct
+      let res = await fetch(`/api/esp-set?value=${encodeURIComponent(value)}`)
+      if (!res.ok) {
+        res = await fetch(`${base.replace(/\/$/, "")}/set?value=${encodeURIComponent(value)}`)
+      }
+      
+      // Log successful action
+      if (res.ok) {
+        await logAction()
+      }
+      
       return { ok: res.ok, status: res.status }
     } catch (err) {
       return { ok: false, error: String(err) }

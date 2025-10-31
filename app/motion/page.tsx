@@ -55,7 +55,7 @@ export default function MotionPage() {
           </div>
         {/* Scarecrow button: public/images/buttons/scarecrow-button.png */}
         <div className="absolute bottom-40 right-120">
-          <div className="absolute w-114 h-34 hover:scale-105 transition-transform cursor-pointer" onClick={() => sendCommand('B')}>
+          <div className="absolute w-114 h-34 hover:scale-105 transition-transform cursor-pointer" onClick={() => sendCommand('E', 'motion_page', { button_type: 'scarecrow_buzzer' })}>
             <Image src="SMART FARM/PAGE 8/4x/Asset 112@4x.png" alt="Scarecrow Button" fill className="object-contain" />
           </div>
         </div>

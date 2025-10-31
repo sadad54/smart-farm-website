@@ -32,6 +32,7 @@ const char* DEVICE_ID = "farm_001";
 #define SOILHUMIDITYPIN 32
 #define WATERLEVELPIN   33
 #define RELAYPIN        25
+#define BUZZERPIN       23
 
 /* ---------------- GLOBAL OBJECTS ---------------- */
 dht11 DHT11;
@@ -136,7 +137,7 @@ struct SensorData {
   float soilMoisture;
   float waterLevel;
   float steam;
-  int lightLevel;
+  float lightLevel;  // Changed from int to float
   bool isValid;
 };
 
@@ -144,13 +145,22 @@ SensorData readAllSensors() {
   SensorData data;
   data.isValid = true;
   
-  // Read DHT11
+  // Read DHT11 with retry logic
   int chk = DHT11.read(DHT11PIN);
+  int retry_count = 0;
+  
+  // Retry up to 3 times if sensor fails
+  while (chk != 0 && retry_count < 3) {
+    delay(100);  // Wait a bit before retry
+    chk = DHT11.read(DHT11PIN);
+    retry_count++;
+  }
+  
   if (chk == 0) {
     data.temperature = DHT11.temperature;
     data.humidity = DHT11.humidity;
   } else {
-    Serial.printf("⚠️ DHT11 Error: %d\n", chk);
+    Serial.printf("⚠️ DHT11 Error: %d (after %d retries)\n", chk, retry_count);
     data.temperature = -999;
     data.humidity = -999;
     data.isValid = false;
@@ -161,17 +171,35 @@ SensorData readAllSensors() {
   long soilSum = 0, waterSum = 0, steamSum = 0, lightSum = 0;
   
   for(int i = 0; i < samples; i++) {
-    soilSum += analogRead(SOILHUMIDITYPIN);
-    waterSum += analogRead(WATERLEVELPIN);
-    steamSum += analogRead(STEAMPIN);
-    lightSum += analogRead(LIGHTPIN);
+    int soilReading = analogRead(SOILHUMIDITYPIN);
+    int waterReading = analogRead(WATERLEVELPIN);  
+    int steamReading = analogRead(STEAMPIN);
+    int lightReading = analogRead(LIGHTPIN);
+    
+    soilSum += soilReading;
+    waterSum += waterReading;
+    steamSum += steamReading;
+    lightSum += lightReading;
+    
+    // Debug individual readings
+    if (i == 0) {
+      Serial.printf("📊 Sensor readings - Soil: %d, Water: %d, Steam: %d, Light: %d\n", 
+                    soilReading, waterReading, steamReading, lightReading);
+    }
+    
     delay(10);
   }
   
   data.soilMoisture = min((soilSum / samples / 4095.0 * 100 * 2.3), 100.0);
   data.waterLevel = min((waterSum / samples / 4095.0 * 100 * 2.5), 100.0);
   data.steam = steamSum / samples / 4095.0 * 100;
-  data.lightLevel = lightSum / samples;
+  
+  // Convert light sensor ADC value to percentage (0-100% brightness)
+  float rawLight = lightSum / samples;
+  data.lightLevel = (rawLight / 4095.0 * 100);
+  
+  // Debug logging for light sensor
+  Serial.printf("🔆 Light Debug - Raw ADC: %.0f, Calculated: %.1f%%\n", rawLight, data.lightLevel);
   
   return data;
 }
@@ -182,14 +210,21 @@ SensorData readAllSensors() {
 String getSensorDataHTML() {
   SensorData data = readAllSensors();
   
-  String html = "<h3>📊 Live Sensors</h3>";
-  html += "🌡️ Temp: " + String(data.temperature, 1) + "°C<br/>";
-  html += "💧 Humidity: " + String(data.humidity, 1) + "%<br/>";
-  html += "🌱 Soil: " + String(data.soilMoisture, 1) + "%<br/>";
-  html += "💦 Water: " + String(data.waterLevel, 1) + "%<br/>";
-  html += "☁️ Steam: " + String(data.steam, 1) + "%<br/>";
-  html += "☀️ Light: " + String(data.lightLevel);
+  // Debug: Print what we're about to send for light
+  Serial.printf("🔍 HTML Debug - Light value before string conversion: %.1f\n", data.lightLevel);
+  String lightStr = String(data.lightLevel, 1);
+  Serial.printf("🔍 HTML Debug - Light as string: '%s'\n", lightStr.c_str());
   
+  // Format exactly matching dashboard parser regex patterns
+  String html = "<h3>📊 Live Sensors</h3>";
+  html += "Temperature:</b> <b>" + String(data.temperature, 1) + "</b>°C<br/>";
+  html += "Humidity:</b> <b>" + String(data.humidity, 1) + "</b>%<br/>";
+  html += "SoilHumidity:</b> <b>" + String(data.soilMoisture, 1) + "</b>%<br/>";
+  html += "WaterLevel:</b> <b>" + String(data.waterLevel, 1) + "</b>%<br/>";
+  html += "Steam:</b> <b>" + String(data.steam, 1) + "</b>%<br/>";
+  html += "Light:</b> <b>" + lightStr + "</b>";
+  
+  Serial.printf("🔍 Final HTML: %s\n", html.c_str());
   return html;
 }
 
@@ -286,6 +321,21 @@ void executeAction(String action, int duration_ms = 3000) {
     servoState = !servoState;
     myservo.write(servoState ? 80 : 180);
     Serial.printf("✅ Feeder %s\n", servoState ? "OPEN" : "CLOSED");
+  }
+  else if (action == "buzzer" || action == "E") {
+    // Scarecrow buzzer - play alarm pattern
+    Serial.println("🚨 Activating scarecrow buzzer!");
+    for (int i = 0; i < 3; i++) {
+      // High frequency alarm sound
+      tone(BUZZERPIN, 2000, 200);
+      delay(250);
+      tone(BUZZERPIN, 1500, 200);
+      delay(250);
+      tone(BUZZERPIN, 2500, 200);
+      delay(500);
+    }
+    noTone(BUZZERPIN);
+    Serial.println("✅ Scarecrow activated - animals scared away!");
   }
   else {
     Serial.printf("⚠️ Unknown action: %s\n", action.c_str());
@@ -414,6 +464,25 @@ void handleData(AsyncWebServerRequest *request) {
   request->send(200, "application/json", getSensorDataJSON());
 }
 
+void handleDHT(AsyncWebServerRequest *request) {
+  // Return sensor data in HTML format for dashboard compatibility
+  String html = getSensorDataHTML();
+  request->send(200, "text/html", html);
+  Serial.println("📊 DHT endpoint called - returning HTML sensor data");
+}
+
+void handleSet(AsyncWebServerRequest *request) {
+  // Handle commands via /set?value=X format (dashboard compatibility)
+  if (request->hasParam("value")) {
+    String value = request->getParam("value")->value();
+    Serial.printf("🎮 SET command received: %s\n", value.c_str());
+    executeAction(value, 3000);
+    request->send(200, "text/plain", "OK");
+  } else {
+    request->send(400, "text/plain", "Missing value parameter");
+  }
+}
+
 void handleCommand(AsyncWebServerRequest *request) {
   if (request->hasParam("action")) {
     String action = request->getParam("action")->value();
@@ -495,6 +564,7 @@ void setup() {
   pinMode(FANPIN1, OUTPUT);
   pinMode(FANPIN2, OUTPUT);
   pinMode(RELAYPIN, OUTPUT);
+  pinMode(BUZZERPIN, OUTPUT);
   pinMode(STEAMPIN, INPUT);
   pinMode(LIGHTPIN, INPUT);
   pinMode(SOILHUMIDITYPIN, INPUT);
@@ -505,6 +575,7 @@ void setup() {
   digitalWrite(FANPIN1, LOW);
   digitalWrite(FANPIN2, LOW);
   digitalWrite(RELAYPIN, LOW);
+  digitalWrite(BUZZERPIN, LOW);
   
   // Servo setup
   Serial.println("🔧 Initializing servo...");
@@ -535,6 +606,8 @@ void setup() {
     Serial.println("🔧 Starting web server...");
     server.on("/", HTTP_GET, handleRoot);
     server.on("/data", HTTP_GET, handleData);
+    server.on("/dht", HTTP_GET, handleDHT);  // New endpoint for dashboard compatibility
+    server.on("/set", HTTP_GET, handleSet);  // New endpoint for command compatibility
     server.on("/cmd", HTTP_GET, handleCommand);
     server.onNotFound(handleNotFound);
     server.begin();

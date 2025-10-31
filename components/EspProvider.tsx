@@ -6,7 +6,7 @@ import useEsp, { EspState } from "@/hooks/useEsp"
 type EspContextValue = {
   state: EspState
   connected: boolean
-  sendCommand: (value: string) => Promise<any>
+  sendCommand: (value: string, location?: string, metadata?: any) => Promise<any>
 }
 
 const EspContext = createContext<EspContextValue | null>(null)
