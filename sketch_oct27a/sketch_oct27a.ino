@@ -54,11 +54,13 @@ unsigned long lastSensorSend = 0;
 unsigned long lastCommandCheck = 0;
 unsigned long lastHeartbeat = 0;
 unsigned long lastLCDUpdate = 0;
+unsigned long servoOpenTime = 0;      // Track when servo was opened
 
 const long sensorInterval    = 5000;   // 5s for sensor updates (reduce cloud requests)
 const long commandInterval   = 250;    // 250ms for ultra-fast command response
 const long heartbeatInterval = 30000;  // 30s heartbeat
 const long lcdUpdateInterval = 2000;   // 2s LCD refresh
+const long servoAutoCloseInterval = 5000; // 5s auto-close for feeder
 
 /* ---------------- CONNECTION RETRY ---------------- */
 int wifiRetries = 0;
@@ -361,9 +363,18 @@ void executeAction(String action, int duration_ms = 3000) {
     Serial.printf("✅ Light %s\n", ledState ? "ON" : "OFF");
   }
   else if (action == "feed" || action == "C") {
-    servoState = !servoState;
-    myservo.write(servoState ? 80 : 180);
-    Serial.printf("✅ Feeder %s\n", servoState ? "OPEN" : "CLOSED");
+    // Always open the feeder when feed command is received
+    servoState = true;
+    myservo.write(80); // Open position
+    servoOpenTime = millis(); // Record when it was opened
+    Serial.println("✅ Feeder OPENED - will auto-close in 5 seconds");
+  }
+  else if (action == "feed_close" || action == "close_feeder") {
+    // Manual close command (optional)
+    servoState = false;
+    myservo.write(180); // Closed position
+    servoOpenTime = 0;  // Reset timer
+    Serial.println("✅ Feeder MANUALLY CLOSED");
   }
   else if (action == "buzzer" || action == "E") {
     // Scarecrow buzzer - play alarm pattern
@@ -698,6 +709,8 @@ void setup() {
   Serial.println("🔧 Initializing servo...");
   myservo.attach(SERVOPIN);
   myservo.write(180); // Closed position
+  servoState = false; // Ensure state matches position
+  servoOpenTime = 0;  // Initialize timer
   delay(500);
   
   // LCD setup
@@ -782,6 +795,14 @@ void loop() {
   if (now - lastLCDUpdate >= lcdUpdateInterval) {
     updateLCD();
     lastLCDUpdate = now;
+  }
+  
+  // Auto-close servo feeder after timeout
+  if (servoState && servoOpenTime > 0 && (now - servoOpenTime >= servoAutoCloseInterval)) {
+    servoState = false;
+    myservo.write(180); // Closed position
+    servoOpenTime = 0;  // Reset timer
+    Serial.println("✅ Feeder AUTO-CLOSED after 5 seconds");
   }
   
   // Small delay to prevent watchdog issues
