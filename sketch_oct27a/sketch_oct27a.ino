@@ -222,15 +222,21 @@ SensorData readAllSensors() {
     delay(10);
   }
   
-  data.soilMoisture = min((soilSum / samples / 4095.0 * 100 * 2.3), 100.0);
-  data.waterLevel = min((waterSum / samples / 4095.0 * 100 * 2.5), 100.0);
-  data.steam = steamSum / samples / 4095.0 * 100;
-  
-  // Convert light sensor ADC value to percentage (0-100% brightness)
+  // Calculate sensor percentages with debug info
+  float rawSoil = soilSum / samples;
+  float rawWater = waterSum / samples;
+  float rawSteam = steamSum / samples;
   float rawLight = lightSum / samples;
+  
+  data.soilMoisture = min((rawSoil / 4095.0 * 100 * 2.3), 100.0);
+  data.waterLevel = min((rawWater / 4095.0 * 100 * 2.5), 100.0);
+  data.steam = rawSteam / 4095.0 * 100;
   data.lightLevel = (rawLight / 4095.0 * 100);
   
-  // Debug logging for light sensor
+  // Debug logging for all analog sensors
+  Serial.printf("🌱 Soil Debug - Raw ADC: %.0f, Calculated: %.1f%%\n", rawSoil, data.soilMoisture);
+  Serial.printf("💧 Water Debug - Raw ADC: %.0f, Calculated: %.1f%%\n", rawWater, data.waterLevel);
+  Serial.printf("💨 Steam Debug - Raw ADC: %.0f, Calculated: %.1f%%\n", rawSteam, data.steam);
   Serial.printf("🔆 Light Debug - Raw ADC: %.0f, Calculated: %.1f%%\n", rawLight, data.lightLevel);
   
   // Read Ultrasonic Sensor HC-SR04
