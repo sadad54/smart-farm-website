@@ -477,7 +477,7 @@ export default function AIInsightsPage() {
           </div>
 
           {/* Badges Card */}
-          <Card className="bg-yellow-100/90 backdrop-blur-sm rounded-3xl p-6 border-4 border-yellow-400">
+          <Card className="bg-yellow-100/90 backdrop-blur-sm rounded-3xl p-6 border-4 border-yellow-400 absolute bottom-[10px]">
             <h3 className={`${poppins.className} text-2xl font-bold text-orange-900 mb-2`}>
               Your Badges
             </h3>
