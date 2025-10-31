@@ -187,11 +187,13 @@ function getActionType(action: string): string {
     'C': 'feed',
     'D': 'water',
     'E': 'buzzer',
+    'P': 'pir_alarm',
     'light': 'light',
     'fan': 'fan',
     'feed': 'feed',
     'water': 'water',
-    'buzzer': 'buzzer'
+    'buzzer': 'buzzer',
+    'pir_alarm': 'pir_alarm'
   }
   
   return actionMap[action] || 'unknown'

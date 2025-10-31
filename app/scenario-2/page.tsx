@@ -22,6 +22,7 @@ interface EnvironmentalRule {
     soilMoisture?: { min?: number; max?: number }
     lightLevel?: { min?: number; max?: number }
     distance?: { min?: number; max?: number }
+    motion?: { detected?: boolean }
   }
   actions: {
     fan?: boolean
@@ -64,12 +65,21 @@ const defaultRules: EnvironmentalRule[] = [
   },
   {
     id: "intruder_alert",
-    name: "Intruder Alert",
+    name: "Intruder Alert (Ultrasonic)",
     description: "Buzzer when something is too close",
     conditions: { distance: { max: 10 } },  // Alert when distance is less than 10cm
     actions: { buzzer: true },
     enabled: true,
     priority: 4
+  },
+  {
+    id: "motion_detection_alarm",
+    name: "Motion Detection Alarm",
+    description: "PIR motion sensor triggered alarm",
+    conditions: { motion: { detected: true } },
+    actions: { buzzer: true, led: true },
+    enabled: true,
+    priority: 3
   },
   {
     id: "emergency_protocol",
@@ -168,6 +178,17 @@ export default function Scenario2Page() {
           }
         }
 
+        // Check motion conditions
+        if (conditions.motion) {
+          const motionDetected = state.motionDetected ?? false
+          if (rule.id === 'motion_detection_alarm') {
+            console.log(`🔍 Motion Detection Check - Motion: ${motionDetected}, Required: ${conditions.motion.detected}`)
+          }
+          if (conditions.motion.detected !== undefined && motionDetected !== conditions.motion.detected) {
+            conditionsMet = false
+          }
+        }
+
         if (conditionsMet) {
           currentActiveRules.push(rule.id)
         }
@@ -239,7 +260,8 @@ export default function Scenario2Page() {
           humidity: state.humidity,
           soilMoisture: state.soilHumidity,
           lightLevel: state.light,
-          distance: state.distance
+          distance: state.distance,
+          motionDetected: state.motionDetected
         }
       }
 
@@ -253,7 +275,7 @@ export default function Scenario2Page() {
     } catch (error) {
       console.error(`Failed to execute actions for rule ${rule.name}:`, error)
     }
-  }, [sendCommand, state.temperature, state.humidity, state.soilHumidity, state.light, state.distance])
+  }, [sendCommand, state.temperature, state.humidity, state.soilHumidity, state.light, state.distance, state.motionDetected])
 
   const toggleRule = (ruleId: string) => {
     setRules(prev => prev.map(rule => 
@@ -549,7 +571,13 @@ export default function Scenario2Page() {
                     <div className="font-medium text-gray-700">Conditions:</div>
                     {Object.entries(rule.conditions).map(([key, value]) => (
                       <div key={key} className="text-gray-600 pl-2">
-                        {key}: {value.min && `min ${value.min}`} {value.max && `max ${value.max}`}
+                        {key}: {
+                          'min' in value || 'max' in value 
+                            ? `${value.min ? `min ${value.min}` : ''} ${value.max ? `max ${value.max}` : ''}`.trim()
+                            : 'detected' in value 
+                              ? `motion ${value.detected ? 'required' : 'not required'}`
+                              : 'unknown condition'
+                        }
                       </div>
                     ))}
                     

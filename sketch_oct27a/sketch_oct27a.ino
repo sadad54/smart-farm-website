@@ -32,10 +32,12 @@ const char* DEVICE_ID = "farm_001";
 #define SOILHUMIDITYPIN 32
 #define WATERLEVELPIN   33
 #define RELAYPIN        25
-#define BUZZERPIN       23
+#define BUZZERPIN       16        // Changed to pin 16 for PIR alarm compatibility
 // Ultrasonic Sensor HC-SR04
 #define TRIGPIN         12
 #define ECHOPIN         13
+// PIR Motion Sensor (for Scenario 2 enhanced detection)
+#define PIRPIN          23        // PIR motion sensor on pin 23
 
 /* ---------------- GLOBAL OBJECTS ---------------- */
 dht11 DHT11;
@@ -48,6 +50,8 @@ static bool ledState = false;
 static bool fanState = false;
 static bool servoState = false;
 static bool systemReady = false;
+static bool pirMotionDetected = false;
+static unsigned long lastPirTrigger = 0;
 
 /* ---------------- TIMERS (OPTIMIZED) ---------------- */
 unsigned long lastSensorSend = 0;
@@ -144,8 +148,31 @@ struct SensorData {
   float steam;
   float lightLevel;  // Changed from int to float
   float distance;    // Ultrasonic sensor distance in cm
+  bool motionDetected; // PIR motion sensor
   bool isValid;
 };
+
+/* ---------------- PIR MOTION SENSOR FUNCTION ---------------- */
+bool readPirMotion() {
+  int pirValue = digitalRead(PIRPIN);
+  unsigned long currentTime = millis();
+  
+  if (pirValue == HIGH) {
+    if (!pirMotionDetected || (currentTime - lastPirTrigger > 2000)) { // Debounce for 2 seconds
+      pirMotionDetected = true;
+      lastPirTrigger = currentTime;
+      Serial.println("🚨 PIR Motion Detected - Intruder Alert!");
+      return true;
+    }
+  } else {
+    if (pirMotionDetected && (currentTime - lastPirTrigger > 5000)) { // Clear after 5 seconds
+      pirMotionDetected = false;
+      Serial.println("✅ PIR Motion Cleared");
+    }
+  }
+  
+  return pirMotionDetected;
+}
 
 /* ---------------- ULTRASONIC SENSOR FUNCTION ---------------- */
 float readUltrasonicDistance() {
@@ -270,6 +297,9 @@ SensorData readAllSensors() {
   // Read Ultrasonic Sensor HC-SR04
   data.distance = readUltrasonicDistance();
   
+  // Read PIR Motion Sensor
+  data.motionDetected = readPirMotion();
+  
   return data;
 }
 
@@ -292,7 +322,8 @@ String getSensorDataHTML() {
   html += "WaterLevel:</b> <b>" + String(data.waterLevel, 1) + "</b>%<br/>";
   html += "Steam:</b> <b>" + String(data.steam, 1) + "</b>%<br/>";
   html += "Light:</b> <b>" + lightStr + "</b><br/>";
-  html += "Distance:</b> <b>" + String(data.distance, 1) + "</b>cm";
+  html += "Distance:</b> <b>" + String(data.distance, 1) + "</b>cm<br/>";
+  html += "Motion:</b> <b>" + String(data.motionDetected ? "DETECTED" : "None") + "</b>";
   
   Serial.printf("🔍 Final HTML: %s\n", html.c_str());
   return html;
@@ -309,6 +340,7 @@ String getSensorDataJSON() {
   doc["steam"] = data.steam;
   doc["light"] = data.lightLevel;
   doc["distance"] = data.distance;
+  doc["motion"] = data.motionDetected;
   doc["ip"] = WiFi.localIP().toString();
   
   String output;
@@ -348,6 +380,14 @@ JsonDocument createAPIPayload() {
   JsonObject steam = readings.add<JsonObject>();
   steam["metric"] = "steam";
   steam["value"] = data.steam;
+  
+  JsonObject distance = readings.add<JsonObject>();
+  distance["metric"] = "distance";
+  distance["value"] = data.distance;
+  
+  JsonObject motion = readings.add<JsonObject>();
+  motion["metric"] = "motion_detected";
+  motion["value"] = data.motionDetected ? 1 : 0;
   
   // Add device status
   JsonObject status = doc["status"].to<JsonObject>();
@@ -406,19 +446,64 @@ void executeAction(String action, int duration_ms = 3000) {
     Serial.println("✅ Feeder MANUALLY CLOSED");
   }
   else if (action == "BUZZER" || action == "E") {
-    // Scarecrow buzzer - play alarm pattern
-    Serial.println("🚨 Activating scarecrow buzzer!");
-    for (int i = 0; i < 3; i++) {
-      // High frequency alarm sound
-      tone(BUZZERPIN, 2000, 200);
-      delay(250);
-      tone(BUZZERPIN, 1500, 200);
-      delay(250);
-      tone(BUZZERPIN, 2500, 200);
-      delay(500);
+    // Enhanced alarm system - combines scarecrow with PIR alarm pattern
+    Serial.println("🚨 Activating enhanced intruder alarm!");
+    
+    // Flash LED during alarm
+    digitalWrite(LEDPIN, HIGH);
+    
+    // PIR-style sweeping alarm (rising frequency)
+    for(int i = 200; i <= 1000; i += 10){ 
+      tone(BUZZERPIN, i);
+      delay(10);
     }
+    
+    digitalWrite(LEDPIN, LOW);
+    delay(100);
+    digitalWrite(LEDPIN, HIGH);
+    
+    // PIR-style sweeping alarm (falling frequency)
+    for(int i = 1000; i >= 200; i -= 10){ 
+      tone(BUZZERPIN, i);
+      delay(10);
+    }
+    
+    // Additional high-intensity alarm bursts
+    for (int burst = 0; burst < 2; burst++) {
+      for (int i = 0; i < 5; i++) {
+        tone(BUZZERPIN, 2500, 100);
+        delay(150);
+        tone(BUZZERPIN, 1500, 100);
+        delay(150);
+      }
+      delay(300);
+    }
+    
+    digitalWrite(LEDPIN, LOW);
     noTone(BUZZERPIN);
-    Serial.println("✅ Scarecrow activated - animals scared away!");
+    Serial.println("✅ Enhanced intruder alarm completed - threat neutralized!");
+  }
+  else if (action == "PIR_ALARM" || action == "P") {
+    // PIR-triggered automatic alarm (can be called by motion detection)
+    Serial.println("🚨 PIR Motion Alarm - Automatic Trigger!");
+    
+    digitalWrite(LEDPIN, HIGH);
+    
+    // Quick PIR alarm pattern
+    for(int i = 200; i <= 800; i += 20){ 
+      tone(BUZZERPIN, i);
+      delay(5);
+    }
+    
+    digitalWrite(LEDPIN, LOW);
+    
+    for(int i = 800; i >= 200; i -= 20){ 
+      tone(BUZZERPIN, i);
+      delay(5);
+    }
+    
+    noTone(BUZZERPIN);
+    Serial.println("✅ PIR alarm completed");
   }
   else {
     Serial.printf("⚠️ Unknown action: %s\n", action.c_str());
@@ -461,6 +546,7 @@ void sendSensorData() {
   doc["light_level"] = data.lightLevel;
   doc["steam"] = data.steam;
   doc["distance"] = data.distance;
+  doc["motion_detected"] = data.motionDetected ? 1 : 0;
   
   String payload;
   serializeJson(doc, payload);
@@ -726,6 +812,9 @@ void setup() {
   // Ultrasonic sensor pins
   pinMode(TRIGPIN, OUTPUT);
   pinMode(ECHOPIN, INPUT);
+  
+  // PIR motion sensor pin
+  pinMode(PIRPIN, INPUT);
   
   // Set initial states
   digitalWrite(LEDPIN, LOW);

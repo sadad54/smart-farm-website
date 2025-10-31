@@ -13,7 +13,8 @@ export async function POST(request: NextRequest) {
       water_level,
       light_level,
       steam,
-      distance
+      distance,
+      motion_detected
     } = body
 
     console.log('📊 Received sensor data:', body)
@@ -87,6 +88,16 @@ export async function POST(request: NextRequest) {
         metric: 'distance',
         value: parseFloat(distance),
         unit: 'cm',
+        timestamp: new Date().toISOString()
+      })
+    }
+    
+    if (motion_detected !== undefined) {
+      readings.push({
+        device_id,
+        metric: 'motion_detected',
+        value: parseInt(motion_detected),
+        unit: 'boolean',
         timestamp: new Date().toISOString()
       })
     }

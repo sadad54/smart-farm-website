@@ -10,6 +10,7 @@ export type EspState = {
   light?: number | null
   soilHumidity?: number | null
   distance?: number | null
+  motionDetected?: boolean | null
   raw?: string
 }
 
@@ -62,6 +63,7 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
             light: latestReadings.light_level || null,
             steam: latestReadings.steam || null,
             distance: latestReadings.distance || null,
+            motionDetected: latestReadings.motion_detected === 1,
             raw: "cloud-database"
           }
           
@@ -80,10 +82,11 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
             humidity: ((s.humidity ?? 60) as number) + (Math.random() - 0.5) * 1,
             waterLevel: ((s.waterLevel ?? 61) as number),
             light: ((s.light ?? 43) as number) + Math.round((Math.random() - 0.5) * 2),
-            soilHumidity: ((s.soilHumidity ?? 40) as number) + Math.round((Math.random() - 0.5) * 2),
-            distance: ((s.distance ?? 12.8) as number) + Math.round((Math.random() - 0.5) * 0.5),
-            steam: ((s.steam ?? 0) as number),
-            raw: "fallback-mock"
+          soilHumidity: ((s.soilHumidity ?? 40) as number) + Math.round((Math.random() - 0.5) * 2),
+          distance: ((s.distance ?? 12.8) as number) + Math.round((Math.random() - 0.5) * 0.5),
+          steam: ((s.steam ?? 0) as number),
+          motionDetected: Math.random() > 0.8, // Random motion for fallback
+          raw: "fallback-mock"
           }))
         }
         
@@ -100,6 +103,7 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
           soilHumidity: ((s.soilHumidity ?? 40) as number) + Math.round((Math.random() - 0.5) * 2),
           distance: ((s.distance ?? 12.8) as number) + Math.round((Math.random() - 0.5) * 0.5),
           steam: ((s.steam ?? 0) as number),
+          motionDetected: Math.random() > 0.9, // Occasional motion for offline fallback
           raw: "offline-fallback"
         }))
       }
@@ -129,6 +133,7 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
         case 'C': return 'feed'
         case 'D': return 'water'
         case 'E': return 'buzzer'
+        case 'P': return 'pir_alarm'
         default: return 'unknown'
       }
     }
