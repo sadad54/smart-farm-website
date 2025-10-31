@@ -366,13 +366,16 @@ JsonDocument createAPIPayload() {
 void executeAction(String action, int duration_ms = 3000) {
   Serial.printf("⚡ Executing: %s (duration: %dms)\n", action.c_str(), duration_ms);
   
-  if (action == "water" || action == "D") {
+  // Convert action to uppercase for consistent comparison
+  action.toUpperCase();
+  
+  if (action == "WATER" || action == "D") {
     digitalWrite(RELAYPIN, HIGH);
     delay(duration_ms);
     digitalWrite(RELAYPIN, LOW);
     Serial.println("✅ Water pump executed");
   }
-  else if (action == "fan" || action == "B") {
+  else if (action == "FAN" || action == "B") {
     fanState = !fanState;
     if (fanState) {
       digitalWrite(FANPIN1, HIGH);
@@ -383,26 +386,26 @@ void executeAction(String action, int duration_ms = 3000) {
     }
     Serial.printf("✅ Fan %s\n", fanState ? "ON" : "OFF");
   }
-  else if (action == "light" || action == "A") {
+  else if (action == "LIGHT" || action == "A") {
     ledState = !ledState;
     digitalWrite(LEDPIN, ledState ? HIGH : LOW);
     Serial.printf("✅ Light %s\n", ledState ? "ON" : "OFF");
   }
-  else if (action == "feed" || action == "C") {
+  else if (action == "FEED" || action == "C") {
     // Always open the feeder when feed command is received
     servoState = true;
     myservo.write(80); // Open position
     servoOpenTime = millis(); // Record when it was opened
     Serial.println("✅ Feeder OPENED - will auto-close in 5 seconds");
   }
-  else if (action == "feed_close" || action == "close_feeder") {
+  else if (action == "FEED_CLOSE" || action == "CLOSE_FEEDER") {
     // Manual close command (optional)
     servoState = false;
     myservo.write(180); // Closed position
     servoOpenTime = 0;  // Reset timer
     Serial.println("✅ Feeder MANUALLY CLOSED");
   }
-  else if (action == "buzzer" || action == "E") {
+  else if (action == "BUZZER" || action == "E") {
     // Scarecrow buzzer - play alarm pattern
     Serial.println("🚨 Activating scarecrow buzzer!");
     for (int i = 0; i < 3; i++) {
