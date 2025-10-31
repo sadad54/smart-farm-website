@@ -4,9 +4,18 @@ import Image from "next/image"
 import { useState, useEffect } from "react"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { Card } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Textarea } from "@/components/ui/textarea"
 import { useEspContext } from "@/components/EspProvider"
 import { supabase } from "@/lib/supabase"
 import { Poppins } from "next/font/google"
+import { Calendar, Trash2, Edit, Play, Clock } from 'lucide-react'
 
 const poppins = Poppins({
   subsets: ["latin"],
@@ -32,11 +41,45 @@ interface WaterTankData {
   estimated_days_remaining: number
 }
 
+interface WateringSchedule {
+  id: number
+  name: string
+  plant_type: string
+  water_amount_ml: number
+  duration_ms: number
+  schedule_type: 'once' | 'daily' | 'weekly' | 'custom'
+  scheduled_time: string
+  scheduled_days: number[] | null
+  start_date: string
+  end_date: string | null
+  is_active: boolean
+  next_execution: string | null
+  execution_count: number
+  created_at: string
+}
+
 export default function WaterPage() {
   const { sendCommand } = useEspContext()
   const [wateringHistory, setWateringHistory] = useState<WateringRecord[]>([])
   const [waterTankData, setWaterTankData] = useState<WaterTankData | null>(null)
+  const [schedules, setSchedules] = useState<WateringSchedule[]>([])
   const [loading, setLoading] = useState(true)
+  const [showScheduleModal, setShowScheduleModal] = useState(false)
+  const [editingSchedule, setEditingSchedule] = useState<WateringSchedule | null>(null)
+  
+  // Schedule form state
+  const [scheduleForm, setScheduleForm] = useState({
+    name: '',
+    plant_type: '',
+    water_amount_ml: 250,
+    duration_ms: 5000,
+    schedule_type: 'daily' as 'once' | 'daily' | 'weekly' | 'custom',
+    scheduled_time: '08:00',
+    scheduled_days: [] as number[],
+    start_date: new Date().toISOString().split('T')[0],
+    end_date: '',
+    is_active: true
+  })
 
   // Fetch watering history
   const fetchWateringHistory = async () => {
@@ -60,6 +103,110 @@ export default function WaterPage() {
     } catch (error) {
       console.error('Failed to fetch water tank data:', error)
     }
+  }
+
+  // Fetch watering schedules
+  const fetchSchedules = async () => {
+    try {
+      const response = await fetch('/api/watering-schedules')
+      const result = await response.json()
+      if (result.success) {
+        setSchedules(result.data)
+      }
+    } catch (error) {
+      console.error('Failed to fetch schedules:', error)
+    }
+  }
+
+  // Save schedule
+  const saveSchedule = async () => {
+    try {
+      const method = editingSchedule ? 'PUT' : 'POST'
+      const url = editingSchedule 
+        ? `/api/watering-schedules?id=${editingSchedule.id}`
+        : '/api/watering-schedules'
+      
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(scheduleForm)
+      })
+      
+      if (response.ok) {
+        setShowScheduleModal(false)
+        setEditingSchedule(null)
+        resetForm()
+        fetchSchedules()
+      }
+    } catch (error) {
+      console.error('Failed to save schedule:', error)
+    }
+  }
+
+  // Delete schedule
+  const deleteSchedule = async (id: number) => {
+    try {
+      const response = await fetch(`/api/watering-schedules?id=${id}`, {
+        method: 'DELETE'
+      })
+      
+      if (response.ok) {
+        fetchSchedules()
+      }
+    } catch (error) {
+      console.error('Failed to delete schedule:', error)
+    }
+  }
+
+  // Execute schedule manually
+  const executeSchedule = async (id: number) => {
+    try {
+      await fetch('/api/watering-schedules/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schedule_id: id })
+      })
+      
+      // Refresh data
+      fetchWateringHistory()
+      fetchWaterTankData()
+    } catch (error) {
+      console.error('Failed to execute schedule:', error)
+    }
+  }
+
+  // Reset form
+  const resetForm = () => {
+    setScheduleForm({
+      name: '',
+      plant_type: '',
+      water_amount_ml: 250,
+      duration_ms: 5000,
+      schedule_type: 'daily',
+      scheduled_time: '08:00',
+      scheduled_days: [],
+      start_date: new Date().toISOString().split('T')[0],
+      end_date: '',
+      is_active: true
+    })
+  }
+
+  // Edit schedule
+  const editSchedule = (schedule: WateringSchedule) => {
+    setEditingSchedule(schedule)
+    setScheduleForm({
+      name: schedule.name,
+      plant_type: schedule.plant_type,
+      water_amount_ml: schedule.water_amount_ml,
+      duration_ms: schedule.duration_ms,
+      schedule_type: schedule.schedule_type,
+      scheduled_time: schedule.scheduled_time,
+      scheduled_days: schedule.scheduled_days || [],
+      start_date: schedule.start_date,
+      end_date: schedule.end_date || '',
+      is_active: schedule.is_active
+    })
+    setShowScheduleModal(true)
   }
 
   // Handle watering command
@@ -93,6 +240,7 @@ export default function WaterPage() {
   useEffect(() => {
     fetchWateringHistory()
     fetchWaterTankData()
+    fetchSchedules()
     setLoading(false)
 
     // Real-time subscription for watering history
@@ -130,12 +278,12 @@ export default function WaterPage() {
   return (
     <DashboardLayout>
       <div className="space-y-6">
-        <h2 className="text-3xl font-bold text-white ml-200">Water</h2>
+        <h2 className="text-3xl font-bold text-white ml-265">Water</h2>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
           {/* Left: Robot image and buttons */}
           <div className="w-full flex flex-col items-center">
-            <div className="absolute w-176 h-200 pointer-events-none">
+            <div className="absolute bottom-[40px] w-176 h-200 pointer-events-none">
               <Image
                 src="/SMART FARM/PAGE 10/4x/Asset 136@4x.png"
                 alt="Robot Asset"
@@ -154,10 +302,10 @@ export default function WaterPage() {
                   className="object-contain"
                 />
               </div>
-              <div className="absolute bottom-[5px] left-[440px] w-90 h-40 hover:scale-105 transition-transform cursor-pointer" onClick={() => handleWatering('C', 'garden_plants')}>
+              <div className="absolute bottom-[5px] left-[440px] w-90 h-40 hover:scale-105 transition-transform cursor-pointer" onClick={() => setShowScheduleModal(true)}>
                 <Image
                   src="/SMART FARM/PAGE 10/4x/Asset 179@4x.png"
-                  alt="Feed Plants Button"
+                  alt="Schedule Watering Button"
                   fill
                   className="object-contain"
                 />
@@ -274,8 +422,244 @@ export default function WaterPage() {
                 )}
               </div>
             </Card>
+
+            {/* Watering Schedules Card */}
+            <Card className="bg-green-200/90 backdrop-blur-sm rounded-3xl p-6 border-4 border-green-400">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className={`${poppins.className} text-2xl font-bold text-green-900`}>Scheduled Watering</h3>
+                <Button 
+                  onClick={() => setShowScheduleModal(true)}
+                  className="bg-green-600 hover:bg-green-700"
+                >
+                  <Calendar className="w-4 h-4 mr-2" />
+                  New Schedule
+                </Button>
+              </div>
+              <div className="space-y-3 max-h-60 overflow-y-auto">
+                {schedules.length === 0 ? (
+                  <p className="text-green-700 text-center py-4">No schedules created yet</p>
+                ) : (
+                  schedules.map((schedule) => (
+                    <div key={schedule.id} className="bg-white/70 rounded-xl p-4">
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-2">
+                            <h4 className="font-semibold text-green-900">{schedule.name}</h4>
+                            <Badge variant={schedule.is_active ? "default" : "secondary"}>
+                              {schedule.is_active ? "Active" : "Inactive"}
+                            </Badge>
+                          </div>
+                          <p className="text-sm text-green-700">
+                            {schedule.plant_type} • {schedule.water_amount_ml}ml • {schedule.schedule_type}
+                          </p>
+                          <div className="flex items-center gap-4 mt-2 text-xs text-green-600">
+                            <span className="flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              {schedule.scheduled_time}
+                            </span>
+                            {schedule.next_execution && (
+                              <span>Next: {new Date(schedule.next_execution).toLocaleDateString()}</span>
+                            )}
+                            <span>Runs: {schedule.execution_count}</span>
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => executeSchedule(schedule.id)}
+                            className="h-8 w-8 p-0"
+                          >
+                            <Play className="w-3 h-3" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => editSchedule(schedule)}
+                            className="h-8 w-8 p-0"
+                          >
+                            <Edit className="w-3 h-3" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => deleteSchedule(schedule.id)}
+                            className="h-8 w-8 p-0 text-red-600 hover:text-red-700"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </Card>
           </div>
         </div>
+
+        {/* Schedule Modal */}
+        <Dialog open={showScheduleModal} onOpenChange={setShowScheduleModal}>
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>{editingSchedule ? 'Edit' : 'Create'} Watering Schedule</DialogTitle>
+              <DialogDescription>
+                Set up automated watering schedules for your plants
+              </DialogDescription>
+            </DialogHeader>
+            
+            <div className="grid gap-4 py-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="name">Schedule Name</Label>
+                  <Input
+                    id="name"
+                    value={scheduleForm.name}
+                    onChange={(e) => setScheduleForm({...scheduleForm, name: e.target.value})}
+                    placeholder="e.g., Morning Tomatoes"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="plant_type">Plant Type</Label>
+                  <Input
+                    id="plant_type"
+                    value={scheduleForm.plant_type}
+                    onChange={(e) => setScheduleForm({...scheduleForm, plant_type: e.target.value})}
+                    placeholder="e.g., Tomatoes, Lettuce"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="water_amount">Water Amount (ml)</Label>
+                  <Input
+                    id="water_amount"
+                    type="number"
+                    value={scheduleForm.water_amount_ml}
+                    onChange={(e) => setScheduleForm({...scheduleForm, water_amount_ml: parseInt(e.target.value) || 0})}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="duration">Duration (ms)</Label>
+                  <Input
+                    id="duration"
+                    type="number"
+                    value={scheduleForm.duration_ms}
+                    onChange={(e) => setScheduleForm({...scheduleForm, duration_ms: parseInt(e.target.value) || 0})}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="schedule_type">Schedule Type</Label>
+                  <Select 
+                    value={scheduleForm.schedule_type} 
+                    onValueChange={(value: 'once' | 'daily' | 'weekly' | 'custom') => 
+                      setScheduleForm({...scheduleForm, schedule_type: value})
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="once">One Time</SelectItem>
+                      <SelectItem value="daily">Daily</SelectItem>
+                      <SelectItem value="weekly">Weekly</SelectItem>
+                      <SelectItem value="custom">Custom Days</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="time">Scheduled Time</Label>
+                  <Input
+                    id="time"
+                    type="time"
+                    value={scheduleForm.scheduled_time}
+                    onChange={(e) => setScheduleForm({...scheduleForm, scheduled_time: e.target.value})}
+                  />
+                </div>
+              </div>
+
+              {(scheduleForm.schedule_type === 'weekly' || scheduleForm.schedule_type === 'custom') && (
+                <div>
+                  <Label>Days of Week</Label>
+                  <div className="flex gap-2 mt-2">
+                    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, index) => (
+                      <div key={day} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`day-${index}`}
+                          checked={scheduleForm.scheduled_days.includes(index)}
+                          onCheckedChange={(checked) => {
+                            if (checked) {
+                              setScheduleForm({
+                                ...scheduleForm,
+                                scheduled_days: [...scheduleForm.scheduled_days, index].sort()
+                              })
+                            } else {
+                              setScheduleForm({
+                                ...scheduleForm,
+                                scheduled_days: scheduleForm.scheduled_days.filter(d => d !== index)
+                              })
+                            }
+                          }}
+                        />
+                        <Label htmlFor={`day-${index}`} className="text-sm">{day}</Label>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="start_date">Start Date</Label>
+                  <Input
+                    id="start_date"
+                    type="date"
+                    value={scheduleForm.start_date}
+                    onChange={(e) => setScheduleForm({...scheduleForm, start_date: e.target.value})}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="end_date">End Date (Optional)</Label>
+                  <Input
+                    id="end_date"
+                    type="date"
+                    value={scheduleForm.end_date}
+                    onChange={(e) => setScheduleForm({...scheduleForm, end_date: e.target.value})}
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="is_active"
+                  checked={scheduleForm.is_active}
+                  onCheckedChange={(checked) => setScheduleForm({...scheduleForm, is_active: !!checked})}
+                />
+                <Label htmlFor="is_active">Active Schedule</Label>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button 
+                variant="outline" 
+                onClick={() => {
+                  setShowScheduleModal(false)
+                  setEditingSchedule(null)
+                  resetForm()
+                }}
+              >
+                Cancel
+              </Button>
+              <Button onClick={saveSchedule}>
+                {editingSchedule ? 'Update' : 'Create'} Schedule
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </DashboardLayout>
   )

@@ -14,6 +14,7 @@ const poppins = Poppins({
 
 export default function Scenario1Page() {
   const { state, connected, sendCommand } = useEspContext()
+  const [systemInitialized, setSystemInitialized] = useState(false)
   const [feedingMode, setFeedingMode] = useState<'auto' | 'manual'>('auto')
   const [lastFeedingTime, setLastFeedingTime] = useState<Date | null>(null)
   const [animalDetected, setAnimalDetected] = useState(false)
@@ -23,54 +24,51 @@ export default function Scenario1Page() {
   const prevLight = useRef<number | null>(null)
   const detectionCooldownRef = useRef<number>(0)
 
-  // Real sensor-based animal detection using multiple methods
+  // Real ultrasonic sensor-based animal detection (only when system is initialized)
   useEffect(() => {
-    // Method 1: Use light sensor changes to detect movement/presence
-    // Sudden drops in light level could indicate an animal blocking the sensor
-    const lightThreshold = 1.0 // Increased threshold to reduce false positives
+    if (!systemInitialized) return
     
-    if (state.light !== undefined && state.light !== null && state.light !== -999) {
-      if (prevLight.current !== null) {
-        const lightChange = Math.abs(state.light - prevLight.current)
+    // Use real ultrasonic sensor data from ESP32
+    if (state.distance !== undefined && state.distance !== null && state.distance !== -1) {
+      const currentDistance = state.distance
+      setDistance(currentDistance)
+      
+      // Only detect if enough time has passed since last detection
+      const now = Date.now()
+      if (now - detectionCooldownRef.current > 3000) { // 3 second minimum between detections
         
-        // Only detect if enough time has passed since last detection
-        const now = Date.now()
-        if (now - detectionCooldownRef.current > 5000) { // 5 second minimum between detections
-          
-          // If light level drops significantly (animal blocking sensor)
-          if (lightChange > lightThreshold && state.light < prevLight.current) {
-            // Calculate simulated distance based on light drop intensity
-            // More light drop = closer animal
-            const simulatedDistance = Math.max(2, 10 - (lightChange * 1.5))
-            setDistance(simulatedDistance)
+        // Animal detection logic: 2-7cm range indicates animal presence
+        if (currentDistance >= 2 && currentDistance <= 7) {
+          if (!animalDetected && !feedingCooldown) {
+            setAnimalDetected(true)
+            detectionCooldownRef.current = now
+            console.log(`🐕 Animal detected at ${currentDistance.toFixed(1)}cm - Triggering feeding`)
             
-            // Trigger feeding if in detection range
-            if (simulatedDistance >= 2 && simulatedDistance <= 7) {
-              if (!animalDetected && !feedingCooldown) {
-                setAnimalDetected(true)
-                detectionCooldownRef.current = now
-                if (feedingMode === 'auto') {
-                  handleFeed()
-                }
-              }
+            if (feedingMode === 'auto') {
+              handleFeed()
             }
-          } else {
-            // Gradually increase distance when no significant light change
-            setDistance(prev => Math.min(prev + 0.5, 15))
+          }
+        } else {
+          // Animal moved away or out of range
+          if (animalDetected && currentDistance > 7) {
+            setAnimalDetected(false)
+            console.log(`🚪 Animal left detection zone - Distance: ${currentDistance.toFixed(1)}cm`)
           }
         }
-        
-        // Reset detection if distance is too high
-        if (distance > 7) {
-          setAnimalDetected(false)
-        }
       }
-      prevLight.current = state.light
+    } else {
+      // No valid sensor reading - reset to safe distance
+      setDistance(15)
+      if (animalDetected) {
+        setAnimalDetected(false)
+      }
     }
-  }, [state.light, animalDetected, feedingMode, feedingCooldown, distance])
+  }, [state.distance, animalDetected, feedingMode, feedingCooldown, systemInitialized])
 
-  // Method 2: Fetch real motion events from database
+  // Method 2: Fetch real motion events from database (only when system is initialized)
   useEffect(() => {
+    if (!systemInitialized) return
+    
     const fetchMotionEvents = async () => {
       try {
         const response = await fetch('/api/motion-events?limit=10')
@@ -101,7 +99,7 @@ export default function Scenario1Page() {
     fetchMotionEvents()
     const interval = setInterval(fetchMotionEvents, 5000) // Check every 5 seconds
     return () => clearInterval(interval)
-  }, [feedingMode, feedingCooldown])
+  }, [feedingMode, feedingCooldown, systemInitialized])
 
   // Reset detection after some time without triggers
   useEffect(() => {
@@ -146,6 +144,11 @@ export default function Scenario1Page() {
     }
   }
 
+  const initializeSystem = () => {
+    setSystemInitialized(true)
+    console.log('🚀 Scenario 1: Intelligent Feeding System Initialized')
+  }
+
   const toggleFeedingMode = () => {
     setFeedingMode(prev => prev === 'auto' ? 'manual' : 'auto')
   }
@@ -157,6 +160,59 @@ export default function Scenario1Page() {
           Scenario 1: Intelligent Feeding System
         </h2>
 
+        {/* System Initialization Card */}
+        {!systemInitialized && (
+          <Card className="bg-blue-100/90 backdrop-blur-sm rounded-3xl p-6 border-4 border-blue-400">
+            <h3 className={`${poppins.className} text-2xl font-bold text-blue-900 mb-4`}>
+              Initialize Intelligent Feeding System
+            </h3>
+            
+            <div className="bg-white/80 rounded-2xl p-8 text-center space-y-4">
+              <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-10 h-10 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12z" />
+                </svg>
+              </div>
+              
+              <h4 className="text-xl font-bold text-gray-800 mb-2">
+                Ready to Start Intelligent Feeding
+              </h4>
+              
+              <p className="text-gray-600 mb-6 max-w-md mx-auto">
+                This system uses HC-SR04 ultrasonic sensor for real-time animal detection and automatic feeding. 
+                Click below to initialize the system and start monitoring.
+              </p>
+              
+              <div className="flex items-center justify-center gap-4 mb-4">
+                <div className={`flex items-center gap-2 ${connected ? 'text-green-600' : 'text-red-600'}`}>
+                  <div className={`w-3 h-3 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`} />
+                  <span className="font-semibold">ESP32 {connected ? 'Connected' : 'Disconnected'}</span>
+                </div>
+              </div>
+              
+              <button
+                onClick={initializeSystem}
+                disabled={!connected}
+                className={`px-8 py-4 rounded-xl font-bold text-white text-lg transition-all ${
+                  connected 
+                    ? 'bg-blue-500 hover:bg-blue-600 hover:scale-105 shadow-lg' 
+                    : 'bg-gray-400 cursor-not-allowed'
+                }`}
+              >
+                {connected ? '🚀 Initialize Feeding System' : '⚠️ ESP32 Not Connected'}
+              </button>
+              
+              {!connected && (
+                <p className="text-sm text-red-600 mt-2">
+                  Please ensure ESP32 is connected before initializing the system
+                </p>
+              )}
+            </div>
+          </Card>
+        )}
+
+        {systemInitialized && (
+          <>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Feeding Control Card */}
           <Card className="bg-green-200/90 backdrop-blur-sm rounded-3xl p-6 border-4 border-green-400">
@@ -346,18 +402,20 @@ export default function Scenario1Page() {
                 <p className="text-xs text-yellow-600 mt-1">Primary detection method</p>
               </div>
 
-              {/* Motion Status */}
+              {/* Ultrasonic Distance */}
               <div className="bg-gradient-to-r from-green-50 to-green-100 rounded-xl p-4">
                 <div className="flex items-center gap-2 mb-2">
                   <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2H9z" />
                   </svg>
-                  <h4 className="font-semibold text-green-800">Motion Events</h4>
+                  <h4 className="font-semibold text-green-800">Distance (HC-SR04)</h4>
                 </div>
                 <p className="text-2xl font-bold text-green-900">
-                  {motionEvents.length}
+                  {state.distance !== undefined && state.distance !== null && state.distance !== -1 
+                    ? `${state.distance.toFixed(1)} cm` 
+                    : 'N/A'}
                 </p>
-                <p className="text-xs text-green-600 mt-1">Recent detections</p>
+                <p className="text-xs text-green-600 mt-1">Ultrasonic sensor</p>
               </div>
             </div>
 
@@ -366,28 +424,28 @@ export default function Scenario1Page() {
               <h4 className="font-semibold text-purple-800 mb-2">Detection Algorithm Status</h4>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
                 <div>
-                  <span className="text-purple-700">Method 1:</span>
+                  <span className="text-purple-700">Ultrasonic HC-SR04:</span>
                   <span className={`ml-2 font-semibold ${
-                    state.light !== undefined && state.light !== null && state.light !== -999 
+                    state.distance !== undefined && state.distance !== null && state.distance !== -1 
                       ? 'text-green-600' : 'text-red-600'
                   }`}>
-                    Light-based Detection {state.light !== undefined && state.light !== null && state.light !== -999 ? '✓' : '✗'}
+                    {state.distance !== undefined && state.distance !== null && state.distance !== -1 ? '✓ Active' : '✗ Offline'}
                   </span>
                 </div>
                 <div>
-                  <span className="text-purple-700">Method 2:</span>
+                  <span className="text-purple-700">Detection Zone:</span>
                   <span className={`ml-2 font-semibold ${
-                    motionEvents.length > 0 ? 'text-green-600' : 'text-yellow-600'
+                    distance >= 2 && distance <= 7 ? 'text-red-600' : 'text-green-600'
                   }`}>
-                    Motion History {motionEvents.length > 0 ? '✓' : '◐'}
+                    {distance >= 2 && distance <= 7 ? '🚨 In Range' : '🟢 Clear'}
                   </span>
                 </div>
                 <div>
-                  <span className="text-purple-700">Status:</span>
+                  <span className="text-purple-700">System Status:</span>
                   <span className={`ml-2 font-semibold ${
-                    feedingCooldown ? 'text-orange-600' : animalDetected ? 'text-green-600' : 'text-blue-600'
+                    feedingCooldown ? 'text-orange-600' : animalDetected ? 'text-red-600' : 'text-blue-600'
                   }`}>
-                    {feedingCooldown ? 'Cooldown Active' : animalDetected ? 'Animal Detected' : 'Monitoring'}
+                    {feedingCooldown ? '⏰ Cooldown' : animalDetected ? '🐕 Animal Present' : '👀 Monitoring'}
                   </span>
                 </div>
               </div>
@@ -411,7 +469,7 @@ export default function Scenario1Page() {
                 </div>
                 <h4 className="font-bold text-gray-800 mb-2">1. Detection</h4>
                 <p className="text-sm text-gray-600">
-                  Multi-sensor approach: Light changes & motion analysis detect animal presence
+                  HC-SR04 ultrasonic sensor measures distance to detect animals within 2-7cm range
                 </p>
               </div>
               
@@ -423,7 +481,7 @@ export default function Scenario1Page() {
                 </div>
                 <h4 className="font-bold text-gray-800 mb-2">2. Processing</h4>
                 <p className="text-sm text-gray-600">
-                  ESP32 analyzes sensor patterns and motion history to confirm animal presence
+                  ESP32 processes real-time distance measurements with cooldown protection
                 </p>
               </div>
               
@@ -441,6 +499,9 @@ export default function Scenario1Page() {
             </div>
           </div>
         </Card>
+        </>
+        )}
+
       </div>
     </DashboardLayout>
   )

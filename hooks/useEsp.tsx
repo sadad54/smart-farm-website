@@ -9,10 +9,11 @@ export type EspState = {
   steam?: number | null
   light?: number | null
   soilHumidity?: number | null
+  distance?: number | null
   raw?: string
 }
 
-const DEFAULT_POLL_INTERVAL = 1000
+const DEFAULT_POLL_INTERVAL = 3000 // Increased to 3 seconds for DHT22 stability
 
 export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
   const [state, setState] = useState<EspState>({})
@@ -38,7 +39,8 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
           soil_moisture: sensorData.soilHumidity,
           water_level: sensorData.waterLevel,
           light_level: sensorData.light,
-          steam: sensorData.steam
+          steam: sensorData.steam,
+          distance: sensorData.distance
         })
       })
     } catch (error) {
@@ -63,6 +65,7 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
       const steamMatch = text.match(/Steam:\s*<\/b>\s*<b>([0-9.\-]+)/i)
       const lightMatch = text.match(/Light:\s*<\/b>\s*<b>([0-9.\-]+)/i)
       const soilMatch = text.match(/SoilHumidity:\s*<\/b>\s*<b>([0-9.\-]+)/i)
+      const distanceMatch = text.match(/Distance:\s*<\/b>\s*<b>([0-9.\-]+)/i)
 
       if (tempMatch) result.temperature = Number(tempMatch[1])
       if (humMatch) result.humidity = Number(humMatch[1])
@@ -70,6 +73,7 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
       if (steamMatch) result.steam = Number(steamMatch[1])
       if (lightMatch) result.light = Number(lightMatch[1])
       if (soilMatch) result.soilHumidity = Number(soilMatch[1])
+      if (distanceMatch) result.distance = Number(distanceMatch[1])
 
       return result
     }
@@ -94,22 +98,83 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
       }
 
       try {
-        // Try proxy first, then fall back to direct device URL
-        let res = await fetch(`/api/esp-dht`, { cache: "no-store" })
-        if (!res.ok) {
-          res = await fetch(`${base.replace(/\/$/, "")}/dht`, { cache: "no-store" })
-        }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const text = await res.text()
-        const parsed = parseDhtText(text)
-        setState(parsed)
-        setConnected(true)
+        // Try proxy first (with better error handling)
+        let res: Response;
+        let text: string;
         
-        // Log sensor data to Supabase (throttled to avoid excessive API calls)
-        logSensorDataToDatabase(parsed)
+        try {
+          // Create AbortController for timeout compatibility
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 6000); // 6 second timeout for proxy
+          
+          res = await fetch(`/api/esp-dht`, { 
+            cache: "no-store",
+            signal: controller.signal
+          })
+          
+          clearTimeout(timeoutId);
+          text = await res.text()
+          
+          // Check if response indicates fallback data
+          const isFallback = res.headers.get('X-Fallback-Data') === 'true'
+          if (isFallback) {
+            console.log('📡 Using fallback sensor data due to ESP32 connectivity issues')
+            setConnected(false) // Mark as disconnected when using fallback
+          } else {
+            setConnected(true) // Connected successfully
+          }
+        } catch (proxyError) {
+          console.log('📡 Proxy failed, trying direct ESP32 connection...')
+          // Fallback to direct device URL with timeout
+          const directController = new AbortController();
+          const directTimeoutId = setTimeout(() => directController.abort(), 4000); // 4 second timeout for direct
+          
+          try {
+            res = await fetch(`${base.replace(/\/$/, "")}/dht`, { 
+              cache: "no-store",
+              signal: directController.signal
+            })
+            clearTimeout(directTimeoutId);
+            
+            if (!res.ok) throw new Error(`HTTP ${res.status}`)
+            text = await res.text()
+            setConnected(true)
+          } catch (directError) {
+            clearTimeout(directTimeoutId);
+            throw directError;
+          }
+        }
+        
+        const parsed = parseDhtText(text)
+        
+        // Only update state if there are meaningful changes to prevent infinite loops
+        setState(prevState => {
+          // Check if any sensor values have actually changed (with tolerance for -999 values)
+          const hasChanged = 
+            (prevState.temperature !== parsed.temperature && parsed.temperature !== -999) ||
+            (prevState.humidity !== parsed.humidity && parsed.humidity !== -999) ||
+            prevState.waterLevel !== parsed.waterLevel ||
+            prevState.steam !== parsed.steam ||
+            prevState.light !== parsed.light ||
+            prevState.soilHumidity !== parsed.soilHumidity ||
+            prevState.distance !== parsed.distance ||
+            prevState.raw !== parsed.raw
+          
+          return hasChanged ? parsed : prevState
+        })
+        
+        // Only log sensor data if we have valid readings (not -999 values)
+        if (parsed.temperature !== -999 && parsed.humidity !== -999) {
+          logSensorDataToDatabase(parsed)
+        }
+        
       } catch (err) {
-        // connection error - mark disconnected
+        console.error('📡 ESP32 connection completely failed:', err)
+        // connection error - mark disconnected but keep last known values
         setConnected(false)
+        
+        // Optional: Reduce polling frequency when disconnected to avoid spam
+        // This could be implemented with a dynamic interval adjustment
       }
     }
 

@@ -33,6 +33,9 @@ const char* DEVICE_ID = "farm_001";
 #define WATERLEVELPIN   33
 #define RELAYPIN        25
 #define BUZZERPIN       23
+// Ultrasonic Sensor HC-SR04
+#define TRIGPIN         12
+#define ECHOPIN         13
 
 /* ---------------- GLOBAL OBJECTS ---------------- */
 dht11 DHT11;
@@ -138,8 +141,37 @@ struct SensorData {
   float waterLevel;
   float steam;
   float lightLevel;  // Changed from int to float
+  float distance;    // Ultrasonic sensor distance in cm
   bool isValid;
 };
+
+/* ---------------- ULTRASONIC SENSOR FUNCTION ---------------- */
+float readUltrasonicDistance() {
+  // Clear the trigPin
+  digitalWrite(TRIGPIN, LOW);
+  delayMicroseconds(2);
+  
+  // Set the trigPin high for 10 microseconds
+  digitalWrite(TRIGPIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIGPIN, LOW);
+  
+  // Read the echoPin, returns the sound wave travel time in microseconds
+  unsigned long duration = pulseIn(ECHOPIN, HIGH, 30000); // 30ms timeout
+  
+  // Calculate distance in cm (speed of sound = 343 m/s)
+  // Distance = (duration * 0.034) / 2
+  float distance = (duration * 0.034) / 2;
+  
+  // Validate reading (HC-SR04 range: 2cm - 400cm)
+  if (duration == 0 || distance < 2 || distance > 400) {
+    Serial.println("⚠️ Ultrasonic sensor reading error or out of range");
+    return -1; // Invalid reading
+  }
+  
+  Serial.printf("📏 Ultrasonic - Duration: %lu μs, Distance: %.1f cm\n", duration, distance);
+  return distance;
+}
 
 SensorData readAllSensors() {
   SensorData data;
@@ -201,6 +233,9 @@ SensorData readAllSensors() {
   // Debug logging for light sensor
   Serial.printf("🔆 Light Debug - Raw ADC: %.0f, Calculated: %.1f%%\n", rawLight, data.lightLevel);
   
+  // Read Ultrasonic Sensor HC-SR04
+  data.distance = readUltrasonicDistance();
+  
   return data;
 }
 
@@ -222,7 +257,8 @@ String getSensorDataHTML() {
   html += "SoilHumidity:</b> <b>" + String(data.soilMoisture, 1) + "</b>%<br/>";
   html += "WaterLevel:</b> <b>" + String(data.waterLevel, 1) + "</b>%<br/>";
   html += "Steam:</b> <b>" + String(data.steam, 1) + "</b>%<br/>";
-  html += "Light:</b> <b>" + lightStr + "</b>";
+  html += "Light:</b> <b>" + lightStr + "</b><br/>";
+  html += "Distance:</b> <b>" + String(data.distance, 1) + "</b>cm";
   
   Serial.printf("🔍 Final HTML: %s\n", html.c_str());
   return html;
@@ -238,6 +274,7 @@ String getSensorDataJSON() {
   doc["water"] = data.waterLevel;
   doc["steam"] = data.steam;
   doc["light"] = data.lightLevel;
+  doc["distance"] = data.distance;
   doc["ip"] = WiFi.localIP().toString();
   
   String output;
@@ -569,6 +606,10 @@ void setup() {
   pinMode(LIGHTPIN, INPUT);
   pinMode(SOILHUMIDITYPIN, INPUT);
   pinMode(WATERLEVELPIN, INPUT);
+  
+  // Ultrasonic sensor pins
+  pinMode(TRIGPIN, OUTPUT);
+  pinMode(ECHOPIN, INPUT);
   
   // Set initial states
   digitalWrite(LEDPIN, LOW);

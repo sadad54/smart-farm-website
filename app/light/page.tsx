@@ -3,25 +3,38 @@
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { Card } from "@/components/ui/card"
 import Image from "next/image"
-
+import { useEspContext } from "@/components/EspProvider"
 import { Poppins } from "next/font/google";
-import { useState } from "react"
+import { useState, useEffect } from "react"
 
- function WoodenSlider() {
-  const [brightness, setBrightness] = useState(75) // Default 75%
+interface WoodenSliderProps {
+  brightness: number
+  onChange: (value: number) => void
+  lightOn: boolean
+}
 
+function WoodenSlider({ brightness, onChange, lightOn }: WoodenSliderProps) {
   return (
     <div className="w-full max-w-lg mx-auto">
       {/* Wooden Slider Frame */}
       <div className="relative w-full h-6 rounded-full border-4 border-[#6B3A1E] bg-gradient-to-b from-[#D28B4B] to-[#8B4513] shadow-md overflow-hidden">
         {/* Dynamic Fill (Green light bar) */}
         <div
-          className="absolute top-0 left-0 h-full rounded-full bg-gradient-to-r from-lime-400 to-green-600 transition-all duration-500 ease-in-out"
+          className={`absolute top-0 left-0 h-full rounded-full transition-all duration-500 ease-in-out ${
+            lightOn 
+              ? 'bg-gradient-to-r from-lime-400 to-green-600' 
+              : 'bg-gradient-to-r from-gray-400 to-gray-600'
+          }`}
           style={{ width: `${brightness}%` }}
         ></div>
 
         {/* Inner wood reflection */}
         <div className="absolute inset-0 bg-gradient-to-b from-transparent to-[#00000022] rounded-full pointer-events-none"></div>
+        
+        {/* Light glow effect when on */}
+        {lightOn && (
+          <div className="absolute inset-0 rounded-full shadow-[0_0_20px_rgba(34,197,94,0.5)] pointer-events-none"></div>
+        )}
       </div>
 
       {/* Range Control */}
@@ -30,13 +43,14 @@ import { useState } from "react"
         min="0"
         max="100"
         value={brightness}
-        onChange={(e) => setBrightness(Number(e.target.value))}
+        onChange={(e) => onChange(Number(e.target.value))}
         className="w-full mt-4 accent-green-600 cursor-pointer"
+        disabled={!lightOn}
       />
 
       {/* Label */}
       <p className="text-center text-[#6B3A1E] font-semibold mt-2">
-        Brightness: {brightness}%
+        Brightness: {brightness}% {lightOn ? '(ON)' : '(OFF)'}
       </p>
     </div>
   )
@@ -50,6 +64,45 @@ const poppins = Poppins({
 });
 
 export default function LightPage() {
+  const { state, sendCommand } = useEspContext()
+  const [lightOn, setLightOn] = useState(false)
+  const [brightness, setBrightness] = useState(75) // Default 75%
+
+  // Get real-time light level from ESP32
+  const currentLightLevel = state.light || 850
+
+  // Toggle light function
+  const toggleLight = async () => {
+    try {
+      await sendCommand('A', 'light_page', { 
+        button_type: 'toggle_light', 
+        brightness: brightness,
+        current_state: lightOn ? 'off' : 'on'
+      })
+      setLightOn(!lightOn)
+    } catch (error) {
+      console.error('Failed to toggle light:', error)
+    }
+  }
+
+  // Update brightness when slider changes
+  const handleBrightnessChange = async (newBrightness: number) => {
+    setBrightness(newBrightness)
+    
+    // If light is currently on, send brightness update to ESP32
+    if (lightOn) {
+      try {
+        await sendCommand('A', 'light_page', { 
+          button_type: 'brightness_adjustment', 
+          brightness: newBrightness,
+          current_state: 'on'
+        })
+      } catch (error) {
+        console.error('Failed to update brightness:', error)
+      }
+    }
+  }
+
   return (
     <DashboardLayout>
       <div className="relative min-h-screen flex flex-col items-center">
@@ -66,31 +119,50 @@ export default function LightPage() {
               Grow Light Control
             </h3>
 
-            <div >
+            <div>
               <div className="flex justify-between items-center mb-6">
-                {/* Sun Icon */}
-                <Image
-                  src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Asset%20166%404x-TykyXEoWSabySV4jFe6OkNpHYKRfUO.png"
-                  alt="Sun"
-                  width={80}
-                  height={80}
-                  className="object-contain"
-                />
-                {/* Moon Icon */}
-                <Image
-                  src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Asset%20173%404x-tYkXh1oxqT10WdMYhEtE3zCvqCnDvD.png"
-                  alt="Moon"
-                  width={60}
-                  height={60}
-                  className="object-contain"
-                />
+                {/* Sun Icon - active when light is on */}
+                <div className="relative">
+                  <Image
+                    src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Asset%20166%404x-TykyXEoWSabySV4jFe6OkNpHYKRfUO.png"
+                    alt="Sun"
+                    width={80}
+                    height={80}
+                    className={`object-contain transition-all duration-300 ${
+                      lightOn ? 'filter brightness-125 drop-shadow-[0_0_15px_rgba(255,255,0,0.8)]' : 'filter brightness-75 grayscale'
+                    }`}
+                  />
+                  {lightOn && (
+                    <div className="absolute inset-0 rounded-full bg-yellow-300/20 blur-lg animate-pulse"></div>
+                  )}
+                </div>
+                
+                {/* Moon Icon - active when light is off */}
+                <div className="relative">
+                  <Image
+                    src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Asset%20173%404x-tYkXh1oxqT10WdMYhEtE3zCvqCnDvD.png"
+                    alt="Moon"
+                    width={60}
+                    height={60}
+                    className={`object-contain transition-all duration-300 ${
+                      !lightOn ? 'filter brightness-125 drop-shadow-[0_0_10px_rgba(147,197,253,0.8)]' : 'filter brightness-75 grayscale'
+                    }`}
+                  />
+                  {!lightOn && (
+                    <div className="absolute inset-0 rounded-full bg-blue-300/20 blur-lg animate-pulse"></div>
+                  )}
+                </div>
               </div>
 
               {/* Brightness Slider */}
-              <WoodenSlider/>
+              <WoodenSlider
+                brightness={brightness}
+                onChange={handleBrightnessChange}
+                lightOn={lightOn}
+              />
 
               <p className="text-[#6B4423] text-lg font-semibold text-center">
-                Adjust the brightness to help your plant grow!
+                {lightOn ? 'Light is ON - Adjust brightness!' : 'Turn on the light to help your plants grow!'}
               </p>
             </div>
           </Card>
@@ -103,27 +175,54 @@ export default function LightPage() {
 
             <div className="bg-white/60 rounded-2xl p-8">
               <div className="flex justify-center items-center gap-8 mb-4">
-                {/* Plant Pot */}
-                <Image
-                 src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Asset%20172%404x-cIQj3NRqXCchsEO3K3haJwRk4ZOG9u.png"
-        alt="Plant"
-                  width={100}
-                  height={100}
-                  className="object-contain"
-                />
-                {/* Sun Icon */}
-                <Image
-                  src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Asset%20166%404x-TykyXEoWSabySV4jFe6OkNpHYKRfUO.png"
-                  alt="Sun"
-                  width={80}
-                  height={80}
-                  className="object-contain"
-                />
+                {/* Plant Pot with glow effect when light is on */}
+                <div className={`relative ${lightOn ? 'filter brightness-110' : ''}`}>
+                  <Image
+                   src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Asset%20172%404x-cIQj3NRqXCchsEO3K3haJwRk4ZOG9u.png"
+          alt="Plant"
+                    width={100}
+                    height={100}
+                    className="object-contain"
+                  />
+                  {lightOn && (
+                    <div className="absolute inset-0 rounded-full bg-green-200/30 blur-xl animate-pulse"></div>
+                  )}
+                </div>
+                
+                {/* Sun/Light Icon with dynamic state */}
+                <div className="relative">
+                  <Image
+                    src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Asset%20166%404x-TykyXEoWSabySV4jFe6OkNpHYKRfUO.png"
+                    alt="Sun"
+                    width={80}
+                    height={80}
+                    className={`object-contain transition-all duration-300 ${
+                      lightOn ? 'filter brightness-125 drop-shadow-[0_0_15px_rgba(255,255,0,0.8)]' : 'filter brightness-75'
+                    }`}
+                  />
+                  {lightOn && (
+                    <div className="absolute inset-0 rounded-full bg-yellow-300/20 blur-lg animate-pulse"></div>
+                  )}
+                </div>
               </div>
 
-              <p className="text-[#2D5F3F] text-lg font-bold text-center">
-                Natural Light: 850
-              </p>
+              <div className="space-y-2">
+                <p className="text-[#2D5F3F] text-lg font-bold text-center">
+                  Natural Light: {currentLightLevel.toFixed(1)}
+                </p>
+                <p className="text-[#2D5F3F] text-sm text-center">
+                  Grow Light: {lightOn ? `${brightness}% ON` : 'OFF'}
+                </p>
+                <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
+                  <div 
+                    className={`h-2 rounded-full transition-all duration-500 ${
+                      currentLightLevel > 600 ? 'bg-yellow-400' :
+                      currentLightLevel > 300 ? 'bg-orange-400' : 'bg-blue-400'
+                    }`}
+                    style={{ width: `${Math.min((currentLightLevel / 1000) * 100, 100)}%` }}
+                  ></div>
+                </div>
+              </div>
             </div>
           </Card>
         </div>
@@ -191,14 +290,37 @@ export default function LightPage() {
 
         {/* Toggle Light Button */}
         <div className="fixed bottom-8 right-10 z-10">
-          <button className="relative hover:scale-105 transition-transform">
+          <button 
+            onClick={toggleLight}
+            className={`relative hover:scale-105 transition-all duration-300 ${
+              lightOn ? 'filter brightness-125 drop-shadow-[0_0_20px_rgba(255,255,0,0.6)]' : 'filter brightness-90'
+            }`}
+          >
             <Image
               src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Asset%2089%404x-6UUCeRJnGyFjM2K4XMGVLTeQ7UuU51.png"
-              alt="Toggle Light"
+              alt={lightOn ? "Turn Light OFF" : "Turn Light ON"}
               width={280}
               height={90}
               className="object-contain"
             />
+            
+            {/* Status indicator overlay */}
+            <div className={`absolute top-2 right-2 w-4 h-4 rounded-full transition-all duration-300 ${
+              lightOn ? 'bg-green-400 shadow-[0_0_10px_rgba(34,197,94,0.8)]' : 'bg-red-400'
+            }`}>
+              <div className={`w-full h-full rounded-full ${
+                lightOn ? 'animate-pulse bg-green-300' : 'bg-red-500'
+              }`}></div>
+            </div>
+            
+            {/* Button label */}
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className={`font-bold text-lg drop-shadow-md ${
+                lightOn ? 'text-yellow-900' : 'text-gray-700'
+              }`}>
+                {lightOn ? 'LIGHT ON' : 'LIGHT OFF'}
+              </span>
+            </div>
           </button>
         </div>
       </div>
