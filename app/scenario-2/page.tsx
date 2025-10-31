@@ -242,6 +242,40 @@ export default function Scenario2Page() {
       if (actions.buzzer) {
         await sendCommand('E')  // ESP32 expects 'E' for buzzer/scarecrow alarm
         console.log(`🔊 Buzzer activated by rule: ${rule.name}`)
+        
+        // Log motion event if this is motion-triggered
+        if (rule.id === 'motion_detection_alarm' || rule.id === 'intruder_alert') {
+          try {
+            const motionEventData = {
+              device_id: 'farm_001',
+              motion_detected: true,
+              sensor_type: rule.id === 'motion_detection_alarm' ? 'PIR' : 'ultrasonic',
+              distance_cm: state.distance || null,
+              pir_triggered: rule.id === 'motion_detection_alarm',
+              ultrasonic_triggered: rule.id === 'intruder_alert',
+              animal_type: null, // Will be determined by ML later
+              confidence_score: rule.id === 'motion_detection_alarm' && state.distance && state.distance < 20 ? 95 : 80,
+              alarm_triggered: true,
+              sensor_data: {
+                trigger_rule: rule.name,
+                temperature: state.temperature,
+                humidity: state.humidity,
+                distance: state.distance,
+                light_level: state.light,
+                detection_source: 'scenario_2_automated'
+              }
+            }
+            
+            await fetch('/api/motion-events', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(motionEventData)
+            })
+            console.log(`📝 Motion event logged for rule: ${rule.name}`)
+          } catch (error) {
+            console.error('Failed to log motion event:', error)
+          }
+        }
       }
       
       if (actions.feeding) {

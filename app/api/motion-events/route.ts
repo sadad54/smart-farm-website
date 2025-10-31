@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST - Add new motion event
+// POST - Add new motion event with PIR and ultrasonic correlation
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
@@ -64,8 +64,19 @@ export async function POST(request: NextRequest) {
       motion_detected,
       animal_type,
       confidence_score,
-      sensor_data
+      sensor_data,
+      distance_cm,
+      pir_triggered = false,
+      ultrasonic_triggered = false,
+      alarm_triggered = false,
+      sensor_type = 'PIR'
     } = body
+
+    console.log('🚨 Motion event received:', { motion_detected, sensor_type, distance_cm, pir_triggered, ultrasonic_triggered })
+
+    // Determine if this is a combined detection event
+    const isCombinedDetection = pir_triggered && ultrasonic_triggered
+    const enhancedConfidence = isCombinedDetection ? Math.min(100, (confidence_score || 75) + 15) : (confidence_score || 75)
 
     const { data, error } = await supabaseAdmin
       .from('motion_events')
@@ -73,9 +84,19 @@ export async function POST(request: NextRequest) {
         {
           device_id,
           motion_detected: Boolean(motion_detected),
+          sensor_type: isCombinedDetection ? 'combined' : sensor_type,
+          distance_cm: distance_cm || null,
+          pir_triggered: Boolean(pir_triggered),
+          ultrasonic_triggered: Boolean(ultrasonic_triggered),
           animal_type: animal_type || null,
-          confidence_score: confidence_score || 75,
-          sensor_data: sensor_data || {},
+          confidence_score: enhancedConfidence,
+          sensor_data: {
+            ...sensor_data,
+            detection_method: isCombinedDetection ? 'dual_sensor' : 'single_sensor',
+            raw_distance: distance_cm,
+            timestamp_ms: Date.now()
+          },
+          alarm_triggered: Boolean(alarm_triggered),
           timestamp: new Date().toISOString()
         }
       ])
@@ -86,9 +107,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
+    console.log('✅ Motion event logged:', data[0])
+
     return NextResponse.json({ 
       success: true, 
-      data: data[0] 
+      data: data[0],
+      message: isCombinedDetection ? 'Combined PIR+Ultrasonic detection logged' : 'Motion detection logged'
     }, { status: 201 })
   } catch (error) {
     console.error('API error:', error)

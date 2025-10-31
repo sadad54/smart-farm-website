@@ -39,19 +39,37 @@ export default function MotionSensorCard() {
       )
       .subscribe()
 
-    // Simulate motion detection based on ESP sensor data (if available)
+    // Real-time motion detection from ESP sensor data
     const motionCheckInterval = setInterval(() => {
-      // You can integrate with actual ESP motion sensor data here
-      // For now, simulate with random detection
-      const hasMotion = Math.random() > 0.7 // 30% chance of motion
-      if (hasMotion !== motionDetected) {
-        setMotionDetected(hasMotion)
-        setMotionIntensity(Math.floor(Math.random() * 40) + 60) // 60-100%
-        
-        // Log motion event to database
-        logMotionEvent(hasMotion)
+      // Check if we have real sensor data from ESP
+      if (state.motionDetected !== undefined && state.motionDetected !== null) {
+        // Use actual PIR sensor data from ESP
+        const currentMotion = Boolean(state.motionDetected)
+        if (currentMotion !== motionDetected) {
+          setMotionDetected(currentMotion)
+          // Calculate confidence based on distance sensor correlation
+          const distance = state.distance || 999
+          let confidence = 75
+          if (currentMotion && distance < 20) {
+            confidence = 95 // High confidence when PIR + close distance
+          } else if (currentMotion && distance < 50) {
+            confidence = 85 // Medium confidence when PIR + medium distance  
+          }
+          setMotionIntensity(confidence)
+          
+          // Log the motion event with sensor correlation
+          logMotionEvent(currentMotion, distance, confidence)
+        }
+      } else {
+        // Fallback to simulation if no ESP data
+        const hasMotion = Math.random() > 0.7 // 30% chance of motion
+        if (hasMotion !== motionDetected) {
+          setMotionDetected(hasMotion)
+          setMotionIntensity(Math.floor(Math.random() * 40) + 60) // 60-100%
+          logMotionEvent(hasMotion)
+        }
       }
-    }, 3000) // Check every 3 seconds
+    }, 2000) // Check every 2 seconds for more responsive updates
 
     return () => {
       motionSubscription.unsubscribe()
@@ -79,10 +97,23 @@ export default function MotionSensorCard() {
     }
   }
 
-  const logMotionEvent = async (detected: boolean) => {
+  const logMotionEvent = async (detected: boolean, distance?: number, confidence?: number) => {
     try {
       const animalTypes = ['chicken', 'butterfly', 'rabbit', 'bird', 'unknown']
       const randomAnimal = detected ? animalTypes[Math.floor(Math.random() * animalTypes.length)] : null
+
+      // Determine sensor correlation
+      const pirTriggered = detected // PIR sensor detected motion
+      const ultrasonicTriggered = detected && distance !== undefined && distance < 30 // Close distance indicates object
+      const confidenceScore = confidence || motionIntensity
+
+      console.log('📝 Logging motion event:', { 
+        detected, 
+        distance, 
+        pirTriggered, 
+        ultrasonicTriggered, 
+        confidenceScore 
+      })
 
       await supabase
         .from('motion_events')
@@ -90,8 +121,18 @@ export default function MotionSensorCard() {
           {
             device_id: 'farm_001',
             motion_detected: detected,
+            sensor_type: ultrasonicTriggered ? 'combined' : 'PIR',
+            distance_cm: distance || null,
+            pir_triggered: pirTriggered,
+            ultrasonic_triggered: ultrasonicTriggered,
             animal_type: randomAnimal,
-            confidence_score: motionIntensity,
+            confidence_score: confidenceScore,
+            sensor_data: {
+              esp_raw_distance: distance,
+              detection_source: 'motion_sensor_card',
+              timestamp: new Date().toISOString()
+            },
+            alarm_triggered: false, // Card doesn't trigger alarms directly
             timestamp: new Date().toISOString()
           }
         ])
@@ -103,7 +144,69 @@ export default function MotionSensorCard() {
   return (
     <Card className="bg-yellow-100/90 backdrop-blur-sm rounded-3xl p-6 border-4 border-yellow-400 w-1/2 transition-all duration-500">
       {/* Header */}
-      <h3 className="text-2xl font-bold text-orange-900 mb-4">Motion Sensor</h3>
+      <h3 className="text-2xl font-bold text-orange-900 mb-4">Motion Detection System</h3>
+      
+      {/* Sensor Status Panel */}
+      <div className="mb-4 space-y-2">
+        {/* PIR Motion Sensor Status */}
+        <div className={`flex items-center justify-between p-3 rounded-lg border-2 ${
+          motionDetected 
+            ? "bg-gradient-to-r from-red-50 to-orange-50 border-red-300" 
+            : "bg-gradient-to-r from-green-50 to-blue-50 border-green-300"
+        }`}>
+          <div className="flex items-center gap-3">
+            <div className={`w-3 h-3 rounded-full ${
+              motionDetected ? "bg-red-500 animate-pulse" : "bg-green-500"
+            }`} />
+            <div>
+              <h4 className="font-semibold text-gray-800 text-sm">PIR Motion</h4>
+              <p className="text-xs text-gray-600">
+                {motionDetected ? "Motion Detected!" : "Clear"}
+              </p>
+            </div>
+          </div>
+          <div className="text-right">
+            <p className="text-base font-bold text-gray-800">{motionIntensity}%</p>
+            <p className="text-xs text-gray-500">Confidence</p>
+          </div>
+        </div>
+
+        {/* Ultrasonic Distance Sensor Status */}
+        <div className={`flex items-center justify-between p-3 rounded-lg border ${
+          state.distance && state.distance < 30 
+            ? "bg-yellow-50 border-yellow-300" 
+            : "bg-gray-50 border-gray-300"
+        }`}>
+          <div className="flex items-center gap-3">
+            <div className={`w-3 h-3 rounded-full ${
+              state.distance && state.distance < 30 ? "bg-yellow-500" : "bg-gray-400"
+            }`} />
+            <div>
+              <h4 className="font-medium text-gray-700 text-sm">Distance Sensor</h4>
+              <p className="text-xs text-gray-500">
+                {state.distance && state.distance < 30 ? "Object Nearby" : "Clear Range"}
+              </p>
+            </div>
+          </div>
+          <div className="text-right">
+            <p className="text-base font-semibold text-gray-700">
+              {state.distance ? `${state.distance.toFixed(1)}cm` : 'N/A'}
+            </p>
+            <p className="text-xs text-gray-400">Distance</p>
+          </div>
+        </div>
+
+        {/* Combined Detection Status */}
+        {motionDetected && state.distance && state.distance < 30 && (
+          <div className="p-2 rounded-lg bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-300">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
+              <h4 className="font-medium text-purple-800 text-sm">🎯 Dual Sensor Lock</h4>
+            </div>
+            <p className="text-xs text-purple-600 ml-4">PIR + Distance correlation confirmed</p>
+          </div>
+        )}
+      </div>
 
       {/* Content layout */}
       <div className="flex gap-6">
