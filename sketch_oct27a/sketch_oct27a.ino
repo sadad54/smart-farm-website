@@ -668,7 +668,7 @@ void setup() {
   }
   
   delay(2000);
-  
+  WiFi.setSleep(false);
   Serial.println("\n✅ System Ready!");
   Serial.println("==========================================\n");
 }
