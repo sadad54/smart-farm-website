@@ -202,19 +202,19 @@ export default function Scenario2Page() {
     const timestamp = new Date()
     
     try {
-      // Execute each action
+      // Execute each action (using correct ESP32 command mapping)
       if (actions.fan) {
-        await sendCommand('F')
+        await sendCommand('B')  // ESP32 expects 'B' for fan
         console.log(`🌪️ Fan activated by rule: ${rule.name}`)
       }
       
       if (actions.led) {
-        await sendCommand('L')
+        await sendCommand('A')  // ESP32 expects 'A' for LED/light
         console.log(`💡 LED activated by rule: ${rule.name}`)
       }
       
       if (actions.watering) {
-        await sendCommand('W')
+        await sendCommand('D')  // ESP32 expects 'D' for water
         console.log(`💧 Watering activated by rule: ${rule.name}`)
       }
       
