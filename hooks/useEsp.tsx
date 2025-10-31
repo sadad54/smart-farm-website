@@ -22,14 +22,18 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
   const pollRef = useRef<number | null>(null)
   const lastLogRef = useRef<number>(0)
 
-  // Throttled logging to Supabase (max once per 10 seconds)
+  // Throttled logging to Supabase (max once per 15 seconds to reduce load)
   const logSensorDataToDatabase = async (sensorData: EspState) => {
     const now = Date.now()
-    if (now - lastLogRef.current < 10000) return // Throttle to 10 seconds
+    if (now - lastLogRef.current < 15000) return // Throttle to 15 seconds
     lastLogRef.current = now
 
     try {
-      await fetch('/api/sensor-data', {
+      // Add timeout to prevent hanging
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 8000) // 8 second timeout
+      
+      const response = await fetch('/api/sensor-data', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -41,10 +45,27 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
           light_level: sensorData.light,
           steam: sensorData.steam,
           distance: sensorData.distance
-        })
+        }),
+        signal: controller.signal
       })
-    } catch (error) {
-      console.error('Failed to log sensor data:', error)
+      
+      clearTimeout(timeoutId)
+      
+      // Check if response indicates fallback mode
+      if (response.ok) {
+        const result = await response.json()
+        if (result.fallback) {
+          console.log('📊 Database logging failed but sensor data received')
+        }
+      }
+      
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        console.log('📊 Database logging timeout - continuing with sensor reading')
+      } else {
+        console.log('📊 Database logging failed:', error.message)
+      }
+      // Don't throw error - continue with sensor reading even if logging fails
     }
   }
 

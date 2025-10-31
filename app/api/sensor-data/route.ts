@@ -84,15 +84,61 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No valid sensor data provided' }, { status: 400 })
     }
 
-    // Insert all readings
-    const { data, error } = await supabaseAdmin
-      .from('sensor_readings')
-      .insert(readings)
-      .select()
-
-    if (error) {
-      console.error('Database error:', error)
-      return NextResponse.json({ error: error.message }, { status: 500 })
+    // Insert all readings with retry logic
+    let data = null
+    let lastError = null
+    const maxRetries = 3
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const result = await Promise.race([
+          supabaseAdmin.from('sensor_readings').insert(readings).select(),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Database timeout')), 5000)
+          )
+        ]) as any
+        
+        if (result.error) {
+          lastError = result.error
+          console.log(`Database attempt ${attempt} failed:`, result.error.message)
+          
+          if (attempt === maxRetries) {
+            throw new Error(result.error.message)
+          }
+          
+          // Wait before retry (exponential backoff)
+          await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt - 1) * 500))
+          continue
+        }
+        
+        data = result.data
+        break
+        
+      } catch (error: any) {
+        lastError = error
+        console.log(`Database attempt ${attempt} failed:`, error.message)
+        
+        if (attempt === maxRetries) {
+          console.error('Database error after retries:', {
+            message: error.message,
+            details: error.stack || 'No stack trace available',
+            hint: 'Check Supabase connection and network connectivity',
+            code: error.code || ''
+          })
+          
+          // Return success with fallback to prevent UI errors
+          return NextResponse.json({ 
+            success: true,
+            message: 'Sensor data received but database logging failed',
+            readings_count: readings.length,
+            fallback: true,
+            error: error.message
+          })
+        }
+        
+        // Wait before retry
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt - 1) * 500))
+      }
     }
 
     console.log('✅ Sensor data logged successfully:', data?.length, 'readings')
