@@ -38,6 +38,8 @@ const char* DEVICE_ID = "farm_001";
 #define ECHOPIN         13
 // PIR Motion Sensor (for Scenario 2 enhanced detection)
 #define PIRPIN          23        // PIR motion sensor on pin 23
+// Emergency Stop Button
+#define EMERGENCY_PIN   0         // GPIO 0 (BOOT button) - Emergency system shutdown
 
 /* ---------------- GLOBAL OBJECTS ---------------- */
 dht11 DHT11;
@@ -52,6 +54,9 @@ static bool servoState = false;
 static bool systemReady = false;
 static bool pirMotionDetected = false;
 static unsigned long lastPirTrigger = 0;
+static bool emergencyPressed = false;
+static unsigned long emergencyPressTime = 0;
+static bool emergencyShutdownActive = false;
 
 /* ---------------- TIMERS (OPTIMIZED) ---------------- */
 unsigned long lastSensorSend = 0;
@@ -65,6 +70,7 @@ const long commandInterval   = 250;    // 250ms for ultra-fast command response
 const long heartbeatInterval = 30000;  // 30s heartbeat
 const long lcdUpdateInterval = 2000;   // 2s LCD refresh
 const long servoAutoCloseInterval = 5000; // 5s auto-close for feeder
+const long emergencyHoldTime = 3000;       // 3s hold time to trigger emergency shutdown
 
 /* ---------------- CONNECTION RETRY ---------------- */
 int wifiRetries = 0;
@@ -172,6 +178,183 @@ bool readPirMotion() {
   }
   
   return pirMotionDetected;
+}
+
+/* ---------------- EMERGENCY SHUTDOWN FUNCTION ---------------- */
+void checkEmergencyButton() {
+  int buttonState = digitalRead(EMERGENCY_PIN);
+  unsigned long currentTime = millis();
+  
+  // Button is pressed (LOW on ESP32 BOOT button)
+  if (buttonState == LOW) {
+    if (!emergencyPressed) {
+      // Start of button press
+      emergencyPressed = true;
+      emergencyPressTime = currentTime;
+      Serial.println("🚨 EMERGENCY BUTTON PRESSED - Hold for 3 seconds to shutdown");
+    } else {
+      // Button still held down - check if held long enough
+      if ((currentTime - emergencyPressTime) >= emergencyHoldTime && !emergencyShutdownActive) {
+        emergencyShutdownActive = true;
+        emergencySystemShutdown();
+      }
+    }
+  } else {
+    // Button released
+    if (emergencyPressed) {
+      unsigned long holdDuration = currentTime - emergencyPressTime;
+      if (holdDuration < emergencyHoldTime) {
+        Serial.printf("⚠️ Emergency button released early (held %lums / %lums required)\n", holdDuration, emergencyHoldTime);
+      }
+      emergencyPressed = false;
+      emergencyPressTime = 0;
+    }
+  }
+}
+
+void emergencySystemShutdown() {
+  Serial.println("\n╔═══════════════════════════════════════╗");
+  Serial.println("║  🚨 EMERGENCY SHUTDOWN ACTIVATED 🚨  ║");
+  Serial.println("╚═══════════════════════════════════════╝");
+  
+  // Flash LED rapidly to indicate emergency mode
+  for (int i = 0; i < 10; i++) {
+    digitalWrite(LEDPIN, HIGH);
+    delay(100);
+    digitalWrite(LEDPIN, LOW);
+    delay(100);
+  }
+  
+  // Emergency alarm sound
+  Serial.println("🚨 Sounding emergency alarm...");
+  for (int i = 0; i < 3; i++) {
+    tone(BUZZERPIN, 3000, 200);
+    delay(250);
+    tone(BUZZERPIN, 2000, 200);
+    delay(250);
+  }
+  noTone(BUZZERPIN);
+  
+  // Safely turn off all actuators
+  Serial.println("🔌 Shutting down all actuators...");
+  digitalWrite(LEDPIN, LOW);        // Turn off LED
+  digitalWrite(FANPIN1, LOW);       // Turn off fan
+  digitalWrite(FANPIN2, LOW);
+  digitalWrite(RELAYPIN, LOW);      // Turn off water pump
+  digitalWrite(BUZZERPIN, LOW);     // Turn off buzzer
+  myservo.write(180);               // Close feeder servo
+  
+  // Update LCD with emergency message
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("EMERGENCY STOP!");
+  lcd.setCursor(0, 1);
+  lcd.print("System Halted");
+  
+  // Send emergency shutdown notification to cloud (if connected)
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("📤 Sending emergency shutdown notification to cloud...");
+    
+    HTTPClient http;
+    http.setTimeout(5000);
+    
+    String url = String(API_BASE) + "/device-actions";
+    
+    if (http.begin(url)) {
+      http.addHeader("Content-Type", "application/json");
+      
+      StaticJsonDocument<256> doc;
+      doc["device_id"] = DEVICE_ID;
+      doc["action_type"] = "emergency_shutdown";
+      doc["command"] = "EMERGENCY_STOP";
+      doc["location"] = "esp32_hardware";
+      doc["metadata"]["shutdown_reason"] = "emergency_button_pressed";
+      doc["metadata"]["uptime_seconds"] = millis() / 1000;
+      doc["metadata"]["wifi_rssi"] = WiFi.RSSI();
+      doc["timestamp"] = millis();
+      
+      String payload;
+      serializeJson(doc, payload);
+      
+      int code = http.POST(payload);
+      if (code > 0) {
+        Serial.printf("✅ Emergency notification sent → HTTP %d\n", code);
+      } else {
+        Serial.printf("❌ Failed to send emergency notification: %s\n", http.errorToString(code).c_str());
+      }
+      http.end();
+    }
+    
+    // Disconnect WiFi
+    WiFi.disconnect();
+    Serial.println("📶 WiFi disconnected");
+  }
+  
+  // Final shutdown sequence
+  Serial.println("🛑 Flushing serial buffers...");
+  Serial.flush();
+  
+  Serial.println("🔄 System will restart in 5 seconds...");
+  Serial.println("   Press and hold EMERGENCY button again during startup to prevent restart");
+  
+  // Wait 5 seconds, checking if emergency button is still held
+  for (int i = 5; i > 0; i--) {
+    Serial.printf("   Restart in %d seconds...\n", i);
+    
+    // Check if emergency button is still pressed
+    if (digitalRead(EMERGENCY_PIN) == LOW) {
+      Serial.println("\n🚨 EMERGENCY BUTTON STILL HELD - ENTERING SAFE MODE");
+      enterSafeMode();
+      return; // This will never execute, but good practice
+    }
+    
+    delay(1000);
+  }
+  
+  // Final messages
+  Serial.println("\n🔄 RESTARTING ESP32...");
+  Serial.flush();
+  
+  // Restart the ESP32
+  ESP.restart();
+}
+
+void enterSafeMode() {
+  Serial.println("\n╔═══════════════════════════════════════╗");
+  Serial.println("║     🛡️ ENTERING SAFE MODE 🛡️      ║");
+  Serial.println("╚═══════════════════════════════════════╝");
+  Serial.println("ℹ️ All actuators disabled. System halted.");
+  Serial.println("ℹ️ Power cycle ESP32 to restart normally.");
+  Serial.println("ℹ️ Emergency button will remain active.");
+  
+  // Update LCD
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("SAFE MODE");
+  lcd.setCursor(0, 1);
+  lcd.print("Power Cycle to Exit");
+  
+  // Safe mode loop - only monitor emergency button, do nothing else
+  while (true) {
+    // Slow blink LED to indicate safe mode
+    digitalWrite(LEDPIN, HIGH);
+    delay(1000);
+    digitalWrite(LEDPIN, LOW);
+    delay(1000);
+    
+    // Still monitor emergency button for potential restart
+    if (digitalRead(EMERGENCY_PIN) == HIGH) {
+      // Wait for button release then restart
+      delay(2000);
+      if (digitalRead(EMERGENCY_PIN) == HIGH) {
+        Serial.println("🔄 Emergency button released - restarting...");
+        ESP.restart();
+      }
+    }
+    
+    // Feed watchdog to prevent auto-restart
+    yield();
+  }
 }
 
 /* ---------------- ULTRASONIC SENSOR FUNCTION ---------------- */
@@ -797,6 +980,18 @@ void setup() {
   Serial.println("║   🌿 SMART FARM SYSTEM v2.0  ║");
   Serial.println("╚═══════════════════════════════╝\n");
   
+  // Emergency button early check (before any initialization)
+  pinMode(EMERGENCY_PIN, INPUT_PULLUP);
+  if (digitalRead(EMERGENCY_PIN) == LOW) {
+    Serial.println("🚨 EMERGENCY BUTTON DETECTED AT STARTUP!");
+    Serial.println("🛡️ Entering safe mode immediately...");
+    
+    // Basic LCD setup for safe mode message
+    lcd.init();
+    lcd.backlight();
+    enterSafeMode(); // This will loop forever or restart
+  }
+  
   // Pin initialization
   Serial.println("🔧 Initializing pins...");
   pinMode(LEDPIN, OUTPUT);
@@ -815,6 +1010,10 @@ void setup() {
   
   // PIR motion sensor pin
   pinMode(PIRPIN, INPUT);
+  
+  // Emergency button pin (internal pull-up enabled)
+  pinMode(EMERGENCY_PIN, INPUT_PULLUP);
+  Serial.println("🚨 Emergency button initialized on GPIO 0 (BOOT button)");
   
   // Set initial states
   digitalWrite(LEDPIN, LOW);
@@ -877,6 +1076,10 @@ void setup() {
   delay(2000);
   WiFi.setSleep(false);
   Serial.println("\n✅ System Ready!");
+  Serial.println("==========================================");
+  Serial.println("🚨 EMERGENCY SHUTDOWN:");
+  Serial.println("   Hold BOOT button (GPIO 0) for 3 seconds");
+  Serial.println("   to trigger emergency system shutdown");
   Serial.println("==========================================\n");
 }
 
@@ -922,6 +1125,9 @@ void loop() {
     servoOpenTime = 0;  // Reset timer
     Serial.println("✅ Feeder AUTO-CLOSED after 5 seconds");
   }
+  
+  // Check emergency button (CRITICAL - always check)
+  checkEmergencyButton();
   
   // Small delay to prevent watchdog issues
   delay(10);
