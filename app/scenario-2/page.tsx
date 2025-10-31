@@ -65,8 +65,8 @@ const defaultRules: EnvironmentalRule[] = [
   {
     id: "intruder_alert",
     name: "Intruder Alert",
-    description: "Buzzer when unexpected proximity",
-    conditions: { distance: { min: 8, max: 15 } },
+    description: "Buzzer when something is too close",
+    conditions: { distance: { max: 10 } },  // Alert when distance is less than 10cm
     actions: { buzzer: true },
     enabled: true,
     priority: 4
@@ -156,10 +156,14 @@ export default function Scenario2Page() {
 
         // Check distance conditions
         if (conditions.distance) {
-          if (conditions.distance.min && (state.distance ?? 0) < conditions.distance.min) {
+          const currentDistance = state.distance ?? 0
+          if (rule.id === 'intruder_alert') {
+            console.log(`🔍 Intruder Alert Check - Distance: ${currentDistance}cm, Min: ${conditions.distance.min}, Max: ${conditions.distance.max}`)
+          }
+          if (conditions.distance.min && currentDistance < conditions.distance.min) {
             conditionsMet = false
           }
-          if (conditions.distance.max && (state.distance ?? 0) > conditions.distance.max) {
+          if (conditions.distance.max && currentDistance > conditions.distance.max) {
             conditionsMet = false
           }
         }
@@ -215,7 +219,7 @@ export default function Scenario2Page() {
       }
       
       if (actions.buzzer) {
-        await sendCommand('B')
+        await sendCommand('E')  // ESP32 expects 'E' for buzzer/scarecrow alarm
         console.log(`🔊 Buzzer activated by rule: ${rule.name}`)
       }
       
