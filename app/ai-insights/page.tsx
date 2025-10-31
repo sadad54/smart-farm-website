@@ -512,7 +512,6 @@ export default function AIInsightsPage() {
           }
           
         </div>
-      </div>
     </DashboardLayout>
   )
 }
