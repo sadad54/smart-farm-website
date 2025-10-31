@@ -389,30 +389,47 @@ void sendSensorData() {
   }
   
   HTTPClient http;
-  http.setTimeout(2000); // 2s timeout for speed
-  http.setReuse(true);   // Keep connection alive
+  http.setTimeout(8000); // Increased timeout for cloud requests
+  http.setReuse(false);  // Don't reuse for cloud reliability
   
-  String url = String(API_BASE) + "/sensors";
+  // Send to Vercel sensor-data endpoint
+  String url = String(API_BASE) + "/sensor-data";
   
   if (!http.begin(url)) {
     apiFailures++;
+    Serial.println("❌ Failed to begin HTTP connection");
     return;
   }
   
   http.addHeader("Content-Type", "application/json");
   
-  JsonDocument doc = createAPIPayload();
+  // Create sensor data payload matching your existing API format
+  SensorData data = readAllSensors();
+  StaticJsonDocument<512> doc;
+  
+  doc["device_id"] = DEVICE_ID;
+  doc["temperature"] = data.temperature;
+  doc["humidity"] = data.humidity;
+  doc["soil_moisture"] = data.soilMoisture;
+  doc["water_level"] = data.waterLevel;
+  doc["light_level"] = data.lightLevel;
+  doc["steam"] = data.steam;
+  doc["distance"] = data.distance;
+  
   String payload;
   serializeJson(doc, payload);
+  
+  Serial.printf("📤 Sending to cloud: %s\n", payload.c_str());
   
   int code = http.POST(payload);
   
   if (code > 0) {
-    Serial.printf("📤 Sensors sent → HTTP %d\n", code);
+    String response = http.getString();
+    Serial.printf("📤 Cloud data sent → HTTP %d: %s\n", code, response.c_str());
     apiFailures = 0; // Reset on success
   } else {
     apiFailures++;
-    Serial.printf("❌ POST failed: %s\n", http.errorToString(code).c_str());
+    Serial.printf("❌ Cloud POST failed: %s\n", http.errorToString(code).c_str());
   }
   
   http.end();
@@ -420,6 +437,7 @@ void sendSensorData() {
   // Failsafe: If too many failures, restart
   if (apiFailures >= MAX_API_FAILURES) {
     Serial.println("🔄 Too many API failures, restarting...");
+    delay(5000);
     ESP.restart();
   }
 }
@@ -428,51 +446,97 @@ void checkCommands() {
   if (WiFi.status() != WL_CONNECTED) return;
   
   HTTPClient http;
-  http.setTimeout(1500); // Fast timeout for commands
-  http.setReuse(true);
+  http.setTimeout(5000); // Increased timeout for cloud
+  http.setReuse(false);  // Don't reuse for reliability
   
-  String url = String(API_BASE) + "/commands?device_id=" + DEVICE_ID + "&status=pending";
+  String url = String(API_BASE) + "/device-commands?device_id=" + DEVICE_ID + "&status=pending";
   
-  if (!http.begin(url)) return;
+  if (!http.begin(url)) {
+    Serial.println("❌ Failed to begin command check");
+    return;
+  }
   
   int code = http.GET();
   
   if (code == 200) {
     String payload = http.getString();
-    JsonDocument doc;
+    Serial.printf("📥 Command response: %s\n", payload.c_str());
     
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, payload);
+    
     if (error) {
-      Serial.printf("❌ JSON parse: %s\n", error.c_str());
+      Serial.printf("❌ Command JSON parse error: %s\n", error.c_str());
       http.end();
       return;
     }
     
-    JsonArray cmds = doc.as<JsonArray>();
-    
-    if (cmds.size() > 0) {
-      Serial.printf("📥 Got %d command(s)\n", cmds.size());
-      
-      for (JsonObject cmd : cmds) {
-        int id = cmd["id"];
-        JsonObject command = cmd["command"];
-        String action = command["action"].as<String>();
-        int duration = command["duration_ms"] | 3000;
-        
-        executeAction(action, duration);
-        acknowledgeCommand(id);
+    // Handle both single command and array of commands
+    if (doc.is<JsonArray>()) {
+      JsonArray cmds = doc.as<JsonArray>();
+      if (cmds.size() > 0) {
+        Serial.printf("📥 Processing %d command(s)\n", cmds.size());
+        for (JsonObject cmd : cmds) {
+          processCommand(cmd);
+        }
+      }
+    } else if (doc.is<JsonObject>()) {
+      JsonObject cmd = doc.as<JsonObject>();
+      if (cmd.containsKey("command") || cmd.containsKey("action")) {
+        Serial.println("📥 Processing single command");
+        processCommand(cmd);
       }
     }
+  } else if (code != 204) { // 204 = No commands pending
+    Serial.printf("⚠️ Command check failed → HTTP %d\n", code);
   }
   
   http.end();
 }
 
-void acknowledgeCommand(int id) {
-  HTTPClient http;
-  String url = String(API_BASE) + "/commands";
+void processCommand(JsonObject cmd) {
+  String action;
+  int id = -1;
+  int duration = 3000;
   
-  if (!http.begin(url)) return;
+  // Handle different command formats
+  if (cmd.containsKey("id")) {
+    id = cmd["id"];
+  }
+  
+  if (cmd.containsKey("command") && cmd["command"].is<JsonObject>()) {
+    JsonObject command = cmd["command"];
+    action = command["action"].as<String>();
+    duration = command["duration_ms"] | 3000;
+  } else if (cmd.containsKey("action")) {
+    action = cmd["action"].as<String>();
+    duration = cmd["duration_ms"] | 3000;
+  }
+  
+  if (action.length() > 0) {
+    Serial.printf("⚡ Executing cloud command: %s (ID: %d)\n", action.c_str(), id);
+    executeAction(action, duration);
+    
+    if (id > 0) {
+      acknowledgeCommand(id);
+    }
+  } else {
+    Serial.println("⚠️ Invalid command format");
+  }
+}
+
+void acknowledgeCommand(int id) {
+  if (id <= 0) return; // Invalid ID
+  
+  HTTPClient http;
+  http.setTimeout(5000);
+  
+  String url = String(API_BASE) + "/device-commands";
+  
+  if (!http.begin(url)) {
+    Serial.printf("❌ Failed to begin ACK for command %d\n", id);
+    return;
+  }
   
   http.addHeader("Content-Type", "application/json");
   
@@ -480,12 +544,18 @@ void acknowledgeCommand(int id) {
   doc["command_id"] = id;
   doc["status"] = "completed";
   doc["device_id"] = DEVICE_ID;
+  doc["completed_at"] = millis();
   
   String payload;
   serializeJson(doc, payload);
   
   int code = http.PATCH(payload);
-  Serial.printf("✅ Command %d ACK → %d\n", id, code);
+  
+  if (code > 0) {
+    Serial.printf("✅ Command %d acknowledged → HTTP %d\n", id, code);
+  } else {
+    Serial.printf("❌ Failed to ACK command %d: %s\n", id, http.errorToString(code).c_str());
+  }
   
   http.end();
 }
