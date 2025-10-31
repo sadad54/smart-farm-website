@@ -55,8 +55,8 @@ unsigned long lastCommandCheck = 0;
 unsigned long lastHeartbeat = 0;
 unsigned long lastLCDUpdate = 0;
 
-const long sensorInterval    = 3000;   // 3s for sensor updates
-const long commandInterval   = 1000;   // 1s for ultra-fast command response
+const long sensorInterval    = 5000;   // 5s for sensor updates (reduce cloud requests)
+const long commandInterval   = 250;    // 250ms for ultra-fast command response
 const long heartbeatInterval = 30000;  // 30s heartbeat
 const long lcdUpdateInterval = 2000;   // 2s LCD refresh
 
@@ -446,8 +446,8 @@ void checkCommands() {
   if (WiFi.status() != WL_CONNECTED) return;
   
   HTTPClient http;
-  http.setTimeout(5000); // Increased timeout for cloud
-  http.setReuse(false);  // Don't reuse for reliability
+  http.setTimeout(2000); // Faster timeout for command checking
+  http.setReuse(true);   // Reuse connection for faster commands
   
   String url = String(API_BASE) + "/device-commands?device_id=" + DEVICE_ID + "&status=pending";
   
@@ -766,7 +766,7 @@ void loop() {
     lastSensorSend = now;
   }
   
-  // Check for commands (FAST - 1s interval)
+  // Check for commands (ULTRA-FAST - 250ms interval)
   if (systemReady && now - lastCommandCheck >= commandInterval) {
     checkCommands();
     lastCommandCheck = now;

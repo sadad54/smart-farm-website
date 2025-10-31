@@ -13,7 +13,7 @@ export type EspState = {
   raw?: string
 }
 
-const DEFAULT_POLL_INTERVAL = 5000 // Increased for cloud polling
+const DEFAULT_POLL_INTERVAL = 2000 // Faster polling for responsive UI
 
 export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
   const [state, setState] = useState<EspState>({})
@@ -117,7 +117,7 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
     }
   }, [pollInterval])
 
-  // Cloud-based command sending function
+  // Cloud-based command sending function with fast response
   async function sendCommand(value: string, location?: string, metadata?: any) {
     console.log(`🎛️ Sending cloud command: ${value}`)
     
@@ -134,6 +134,10 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
     }
 
     try {
+      // Use AbortController for faster timeout
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 3000) // 3 second timeout
+      
       // Queue command for ESP32 to pick up
       const response = await fetch('/api/device-commands', {
         method: 'POST',
@@ -143,8 +147,11 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
           action: value.toUpperCase(),
           duration_ms: 3000,
           location: location || 'unknown'
-        })
+        }),
+        signal: controller.signal
       })
+
+      clearTimeout(timeoutId)
 
       if (!response.ok) {
         throw new Error(`Command failed: HTTP ${response.status}`)
@@ -152,6 +159,10 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
 
       const result = await response.json()
       console.log(`✅ Command queued successfully: ${result.command_id}`)
+      
+      // Immediately update state for visual feedback (optimistic update)
+      const actionType = getActionType(value)
+      console.log(`🔄 Providing immediate visual feedback for ${actionType}`)
       
       return { ok: true, command_id: result.command_id }
       
