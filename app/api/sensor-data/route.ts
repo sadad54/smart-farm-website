@@ -12,7 +12,8 @@ export async function POST(request: NextRequest) {
       soil_moisture,
       water_level,
       light_level,
-      steam
+      steam,
+      distance
     } = body
 
     console.log('📊 Received sensor data:', body)
@@ -76,6 +77,16 @@ export async function POST(request: NextRequest) {
         metric: 'steam',
         value: parseFloat(steam),
         unit: 'level',
+        timestamp: new Date().toISOString()
+      })
+    }
+    
+    if (distance !== undefined) {
+      readings.push({
+        device_id,
+        metric: 'distance',
+        value: parseFloat(distance),
+        unit: 'cm',
         timestamp: new Date().toISOString()
       })
     }
