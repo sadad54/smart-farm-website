@@ -370,10 +370,37 @@ export default function DashboardPage() {
 
 </div>
         {/* Device Status Indicators */}
-        <div className="flex gap-4 justify-center mb-6">
-          <StatusIndicator isOn={lightOn} label="Light" />
-          <StatusIndicator isOn={fanOn} label="Fan" />
-          <StatusIndicator isOn={waterOn} label="Water" />
+        <div className="flex gap-6 justify-center mb-6">
+          <div className="flex items-center gap-3 px-6 py-3 rounded-full bg-white/20 backdrop-blur-sm">
+            <div className={`w-4 h-4 rounded-full transition-all duration-300 ${
+              lightOn ? 'bg-green-400 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse' : 'bg-red-400'
+            }`}></div>
+            <span className={`text-base font-medium ${
+              lightOn ? 'text-green-100' : 'text-red-100'
+            }`}>
+              Light {lightOn ? 'ON' : 'OFF'}
+            </span>
+          </div>
+          <div className="flex items-center gap-3 px-6 py-3 rounded-full bg-white/20 backdrop-blur-sm">
+            <div className={`w-4 h-4 rounded-full transition-all duration-300 ${
+              fanOn ? 'bg-green-400 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse' : 'bg-red-400'
+            }`}></div>
+            <span className={`text-base font-medium ${
+              fanOn ? 'text-green-100' : 'text-red-100'
+            }`}>
+              Fan {fanOn ? 'ON' : 'OFF'}
+            </span>
+          </div>
+          <div className="flex items-center gap-3 px-6 py-3 rounded-full bg-white/20 backdrop-blur-sm">
+            <div className={`w-4 h-4 rounded-full transition-all duration-300 ${
+              waterOn ? 'bg-green-400 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse' : 'bg-red-400'
+            }`}></div>
+            <span className={`text-base font-medium ${
+              waterOn ? 'text-green-100' : 'text-red-100'
+            }`}>
+              Water {waterOn ? 'ON' : 'OFF'}
+            </span>
+          </div>
         </div>
 
         <div className="flex gap-4 justify-center">
