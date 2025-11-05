@@ -12,6 +12,7 @@
 #include <LiquidCrystal_I2C.h>
 #include <dht11.h>
 #include <ESP32_Servo.h>
+#include <PubSubClient.h>  // MQTT client library
 
 /* ---------------- WIFI CONFIG ---------------- */
 const char* SSID = "DE-Peplink";        // ⚠️ CHANGE THIS
@@ -20,6 +21,20 @@ const char* PASS = "Dream2025!";    // ⚠️ CHANGE THIS
 /* ---- API Configuration ---- */
 const char* API_BASE  = "https://smart-farm-website-gamma.vercel.app/api";  // ⚠️ CHANGE THIS
 const char* DEVICE_ID = "farm_001";
+
+/* ---------------- MQTT CONFIG ---------------- */
+const char* MQTT_BROKER = "test.mosquitto.org";     // Free Eclipse Mosquitto broker (⚠️ CHANGE FOR PRODUCTION)  
+const int   MQTT_PORT = 1883;                       // Standard MQTT port
+const char* MQTT_USER = "";                         // Leave empty for public broker
+const char* MQTT_PASS = "";                         // Leave empty for public broker
+const char* MQTT_CLIENT_ID = "SmartFarm_ESP32_001"; // Unique client ID
+
+/* ---- MQTT Topics ---- */
+const String TOPIC_SENSORS   = "smartfarm/" + String(DEVICE_ID) + "/sensors/data";
+const String TOPIC_COMMANDS  = "smartfarm/" + String(DEVICE_ID) + "/commands/incoming";
+const String TOPIC_STATUS    = "smartfarm/" + String(DEVICE_ID) + "/commands/status";
+const String TOPIC_HEARTBEAT = "smartfarm/" + String(DEVICE_ID) + "/status";
+const String TOPIC_EMERGENCY = "smartfarm/" + String(DEVICE_ID) + "/emergency";
 
 /* ---------------- PIN MAP ---------------- */
 #define DHT11PIN        17
@@ -39,13 +54,17 @@ const char* DEVICE_ID = "farm_001";
 // PIR Motion Sensor (for Scenario 2 enhanced detection)
 #define PIRPIN          23        // PIR motion sensor on pin 23
 // Emergency Stop Button
-#define EMERGENCY_PIN   0         // GPIO 0 (BOOT button) - Emergency system shutdown
+#define EMERGENCY_PIN   5         // GPIO 5 - Emergency system shutdown button
 
 /* ---------------- GLOBAL OBJECTS ---------------- */
 dht11 DHT11;
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 AsyncWebServer server(80);
 Servo myservo;
+
+/* ---- MQTT Objects ---- */
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
 
 /* ---------------- STATE FLAGS ---------------- */
 static bool ledState = false;
@@ -57,6 +76,13 @@ static unsigned long lastPirTrigger = 0;
 static bool emergencyPressed = false;
 static unsigned long emergencyPressTime = 0;
 static bool emergencyShutdownActive = false;
+
+/* ---- MQTT State Flags ---- */
+static bool mqttConnected = false;
+static bool mqttEnabled = true;     // Can disable MQTT and fallback to HTTP
+static unsigned long lastMqttReconnect = 0;
+static unsigned long lastMqttHeartbeat = 0;
+static int mqttReconnectAttempts = 0;
 
 /* ---------------- TIMERS (OPTIMIZED) ---------------- */
 unsigned long lastSensorSend = 0;
@@ -71,6 +97,11 @@ const long heartbeatInterval = 30000;  // 30s heartbeat
 const long lcdUpdateInterval = 2000;   // 2s LCD refresh
 const long servoAutoCloseInterval = 5000; // 5s auto-close for feeder
 const long emergencyHoldTime = 3000;       // 3s hold time to trigger emergency shutdown
+
+/* ---- MQTT Timing ---- */
+const long mqttReconnectInterval = 5000;   // 5s between MQTT reconnection attempts  
+const long mqttHeartbeatInterval = 30000;  // 30s MQTT heartbeat
+const long mqttKeepAlive = 60;             // 60s MQTT keep-alive
 
 /* ---------------- CONNECTION RETRY ---------------- */
 int wifiRetries = 0;
@@ -158,6 +189,15 @@ struct SensorData {
   bool isValid;
 };
 
+/* ---------------- FUNCTION DECLARATIONS ---------------- */
+// Forward declarations for functions used in MQTT callbacks and other functions
+void executeAction(String action, int duration_ms = 3000);
+void acknowledgeMqttCommand(String commandId, String action);
+void sendMqttStatus(String status);
+void sendMqttSensorData();
+void sendMqttEmergencyAlert();
+SensorData readAllSensors();
+
 /* ---------------- PIR MOTION SENSOR FUNCTION ---------------- */
 bool readPirMotion() {
   int pirValue = digitalRead(PIRPIN);
@@ -182,33 +222,133 @@ bool readPirMotion() {
 
 /* ---------------- EMERGENCY SHUTDOWN FUNCTION ---------------- */
 void checkEmergencyButton() {
-  int buttonState = digitalRead(EMERGENCY_PIN);
+  static unsigned long lastDebounceTime = 0;
+  static bool lastButtonState = HIGH;
+  static bool stableButtonState = HIGH;
+  static unsigned long lastStatusPrint = 0;
+  const unsigned long debounceDelay = 50;    // 50ms debounce
+  const unsigned long statusInterval = 1000; // Print status every 1 second while holding
+  
+  int reading = digitalRead(EMERGENCY_PIN);
   unsigned long currentTime = millis();
   
-  // Button is pressed (LOW on ESP32 BOOT button)
-  if (buttonState == LOW) {
-    if (!emergencyPressed) {
-      // Start of button press
-      emergencyPressed = true;
-      emergencyPressTime = currentTime;
-      Serial.println("🚨 EMERGENCY BUTTON PRESSED - Hold for 3 seconds to shutdown");
+  // Debounce the button reading
+  if (reading != lastButtonState) {
+    lastDebounceTime = currentTime;
+  }
+  
+  if ((currentTime - lastDebounceTime) > debounceDelay) {
+    // If the button state has actually changed after debouncing
+    if (reading != stableButtonState) {
+      stableButtonState = reading;
+      
+      // Print button state change for debugging
+      Serial.print("🔘 Emergency Button: ");
+      if (stableButtonState == LOW) {
+        Serial.println("PRESSED ⬇️");
+      } else {
+        Serial.println("RELEASED ⬆️");
+      }
+    }
+    
+    // Button is pressed (LOW with INPUT_PULLUP)
+    if (stableButtonState == LOW) {
+      if (!emergencyPressed) {
+        // Start of button press
+        emergencyPressed = true;
+        emergencyPressTime = currentTime;
+        lastStatusPrint = currentTime;
+        Serial.println("🚨 EMERGENCY BUTTON PRESSED - Hold for 3 seconds to shutdown");
+        Serial.printf("📍 Using GPIO %d | Button state: %d (LOW = pressed)\n", EMERGENCY_PIN, reading);
+        
+        // Flash LED to indicate button press detected
+        for (int i = 0; i < 3; i++) {
+          digitalWrite(LEDPIN, HIGH);
+          delay(50);
+          digitalWrite(LEDPIN, LOW);
+          delay(50);
+        }
+      } else {
+        // Button still held down - check if held long enough
+        unsigned long holdDuration = currentTime - emergencyPressTime;
+        
+        if (holdDuration >= emergencyHoldTime && !emergencyShutdownActive) {
+          emergencyShutdownActive = true;
+          Serial.printf("🚨 EMERGENCY SHUTDOWN TRIGGERED! (held for %lums)\n", holdDuration);
+          emergencySystemShutdown();
+        } else {
+          // Show progress every second while holding
+          if ((currentTime - lastStatusPrint) >= statusInterval) {
+            Serial.printf("⏳ Holding button: %lu/%lu ms (%.1f%%)\n", 
+                         holdDuration, emergencyHoldTime, 
+                         (float)holdDuration / emergencyHoldTime * 100.0);
+            lastStatusPrint = currentTime;
+            
+            // Pulse LED to show progress
+            digitalWrite(LEDPIN, HIGH);
+            delay(100);
+            digitalWrite(LEDPIN, LOW);
+          }
+        }
+      }
     } else {
-      // Button still held down - check if held long enough
-      if ((currentTime - emergencyPressTime) >= emergencyHoldTime && !emergencyShutdownActive) {
-        emergencyShutdownActive = true;
-        emergencySystemShutdown();
+      // Button released
+      if (emergencyPressed) {
+        unsigned long holdDuration = currentTime - emergencyPressTime;
+        if (holdDuration < emergencyHoldTime) {
+          Serial.printf("⚠️ Emergency button released early (held %lums / %lums required)\n", 
+                       holdDuration, emergencyHoldTime);
+          Serial.println("💡 Hold button for full 3 seconds to trigger emergency shutdown");
+        }
+        emergencyPressed = false;
+        emergencyPressTime = 0;
+        lastStatusPrint = 0;
       }
     }
-  } else {
-    // Button released
-    if (emergencyPressed) {
-      unsigned long holdDuration = currentTime - emergencyPressTime;
-      if (holdDuration < emergencyHoldTime) {
-        Serial.printf("⚠️ Emergency button released early (held %lums / %lums required)\n", holdDuration, emergencyHoldTime);
+  }
+  
+  // Update last button state for next debounce cycle
+  lastButtonState = reading;
+}
+
+// Test function to verify emergency button wiring and functionality
+void testEmergencyButton() {
+  Serial.println("\n🔧 EMERGENCY BUTTON TEST MODE");
+  Serial.println("────────────────────────────────");
+  Serial.printf("📍 Using GPIO %d\n", EMERGENCY_PIN);
+  Serial.println("🔘 Press and release the emergency button to test...");
+  Serial.println("❌ Type 'exit' in Serial Monitor to stop test\n");
+  
+  while (true) {
+    int buttonState = digitalRead(EMERGENCY_PIN);
+    static int lastState = HIGH;
+    static unsigned long lastChange = 0;
+    
+    if (buttonState != lastState) {
+      unsigned long now = millis();
+      if (now - lastChange > 50) { // Simple debounce
+        Serial.print("Button: ");
+        if (buttonState == LOW) {
+          Serial.println("PRESSED ⬇️");
+        } else {
+          Serial.println("RELEASED ⬆️");
+        }
+        lastChange = now;
       }
-      emergencyPressed = false;
-      emergencyPressTime = 0;
+      lastState = buttonState;
     }
+    
+    // Check for exit command (simplified)
+    if (Serial.available()) {
+      String input = Serial.readString();
+      input.trim();
+      if (input.equals("exit") || input.equals("EXIT")) {
+        Serial.println("✅ Exiting test mode...\n");
+        break;
+      }
+    }
+    
+    delay(10);
   }
 }
 
@@ -253,36 +393,44 @@ void emergencySystemShutdown() {
   
   // Send emergency shutdown notification to cloud (if connected)
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("📤 Sending emergency shutdown notification to cloud...");
+    Serial.println("📤 Sending emergency shutdown notification...");
     
-    HTTPClient http;
-    http.setTimeout(5000);
-    
-    String url = String(API_BASE) + "/device-actions";
-    
-    if (http.begin(url)) {
-      http.addHeader("Content-Type", "application/json");
+    // Try MQTT first
+    if (mqttConnected && mqttClient.connected()) {
+      sendMqttEmergencyAlert();
+    } else {
+      // HTTP fallback
+      Serial.println("📤 Using HTTP for emergency notification (MQTT fallback)");
       
-      StaticJsonDocument<256> doc;
-      doc["device_id"] = DEVICE_ID;
-      doc["action_type"] = "emergency_shutdown";
-      doc["command"] = "EMERGENCY_STOP";
-      doc["location"] = "esp32_hardware";
-      doc["metadata"]["shutdown_reason"] = "emergency_button_pressed";
-      doc["metadata"]["uptime_seconds"] = millis() / 1000;
-      doc["metadata"]["wifi_rssi"] = WiFi.RSSI();
-      doc["timestamp"] = millis();
+      HTTPClient http;
+      http.setTimeout(5000);
       
-      String payload;
-      serializeJson(doc, payload);
+      String url = String(API_BASE) + "/device-actions";
       
-      int code = http.POST(payload);
-      if (code > 0) {
-        Serial.printf("✅ Emergency notification sent → HTTP %d\n", code);
-      } else {
-        Serial.printf("❌ Failed to send emergency notification: %s\n", http.errorToString(code).c_str());
+      if (http.begin(url)) {
+        http.addHeader("Content-Type", "application/json");
+        
+        StaticJsonDocument<256> doc;
+        doc["device_id"] = DEVICE_ID;
+        doc["action_type"] = "emergency_shutdown";
+        doc["command"] = "EMERGENCY_STOP";
+        doc["location"] = "esp32_hardware";
+        doc["metadata"]["shutdown_reason"] = "emergency_button_pressed";
+        doc["metadata"]["uptime_seconds"] = millis() / 1000;
+        doc["metadata"]["wifi_rssi"] = WiFi.RSSI();
+        doc["timestamp"] = millis();
+        
+        String payload;
+        serializeJson(doc, payload);
+        
+        int code = http.POST(payload);
+        if (code > 0) {
+          Serial.printf("✅ Emergency notification sent → HTTP %d\n", code);
+        } else {
+          Serial.printf("❌ Failed to send emergency notification: %s\n", http.errorToString(code).c_str());
+        }
+        http.end();
       }
-      http.end();
     }
     
     // Disconnect WiFi
@@ -355,6 +503,265 @@ void enterSafeMode() {
     // Feed watchdog to prevent auto-restart
     yield();
   }
+}
+
+/* ============================================================
+   MQTT FUNCTIONS
+   ============================================================ */
+
+/* ---------------- MQTT CALLBACK (Handle incoming messages) ---------------- */
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  // Convert payload to string
+  String message = "";
+  for (int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+  
+  String topicStr = String(topic);
+  Serial.printf("📨 MQTT Message - Topic: %s, Message: %s\n", topic, message.c_str());
+  
+  // Handle command messages
+  if (topicStr == TOPIC_COMMANDS) {
+    Serial.println("⚡ Processing MQTT command...");
+    
+    // Parse JSON command
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, message);
+    
+    if (error) {
+      Serial.printf("❌ MQTT JSON parse error: %s\n", error.c_str());
+      return;
+    }
+    
+    // Extract command information
+    String action = "";
+    int duration = 3000;
+    String commandId = "";
+    
+    if (doc.containsKey("action")) {
+      action = doc["action"].as<String>();
+    }
+    
+    if (doc.containsKey("duration_ms")) {
+      duration = doc["duration_ms"];
+    }
+    
+    if (doc.containsKey("command_id")) {
+      commandId = doc["command_id"].as<String>();
+    }
+    
+    if (action.length() > 0) {
+      Serial.printf("⚡ Executing MQTT command: %s (Duration: %dms, ID: %s)\n", 
+                   action.c_str(), duration, commandId.c_str());
+      
+      // Execute the action
+      executeAction(action, duration);
+      
+      // Send acknowledgment via MQTT
+      if (commandId.length() > 0) {
+        acknowledgeMqttCommand(commandId, action);
+      }
+    }
+  }
+}
+
+/* ---------------- MQTT CONNECTION FUNCTION ---------------- */
+bool connectMQTT() {
+  if (!mqttEnabled) {
+    Serial.println("📡 MQTT disabled, skipping connection");
+    return false;
+  }
+  
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("❌ WiFi not connected, cannot connect to MQTT");
+    return false;
+  }
+  
+  // Configure MQTT client
+  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
+  mqttClient.setKeepAlive(mqttKeepAlive);
+  
+  Serial.printf("🔌 Connecting to MQTT broker: %s:%d\n", MQTT_BROKER, MQTT_PORT);
+  Serial.printf("📋 Client ID: %s\n", MQTT_CLIENT_ID);
+  
+  // Attempt to connect
+  bool connected = false;
+  if (strlen(MQTT_USER) > 0) {
+    connected = mqttClient.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS);
+  } else {
+    connected = mqttClient.connect(MQTT_CLIENT_ID);
+  }
+  
+  if (connected) {
+    Serial.println("✅ MQTT Connected!");
+    mqttConnected = true;
+    mqttReconnectAttempts = 0;
+    
+    // Subscribe to command topic
+    String commandTopic = TOPIC_COMMANDS;
+    if (mqttClient.subscribe(commandTopic.c_str())) {
+      Serial.printf("📡 Subscribed to: %s\n", commandTopic.c_str());
+    } else {
+      Serial.printf("❌ Failed to subscribe to: %s\n", commandTopic.c_str());
+    }
+    
+    // Send connection status
+    sendMqttStatus("connected");
+    
+    return true;
+  } else {
+    // Detailed MQTT error codes
+    int state = mqttClient.state();
+    Serial.printf("❌ MQTT Connection failed, state: %d ", state);
+    switch(state) {
+      case -4: Serial.println("(MQTT_CONNECTION_TIMEOUT)"); break;
+      case -3: Serial.println("(MQTT_CONNECTION_LOST)"); break;
+      case -2: Serial.println("(MQTT_CONNECT_FAILED)"); break;
+      case -1: Serial.println("(MQTT_DISCONNECTED)"); break;
+      case  1: Serial.println("(MQTT_CONNECT_BAD_PROTOCOL)"); break;
+      case  2: Serial.println("(MQTT_CONNECT_BAD_CLIENT_ID)"); break;
+      case  3: Serial.println("(MQTT_CONNECT_UNAVAILABLE)"); break;
+      case  4: Serial.println("(MQTT_CONNECT_BAD_CREDENTIALS)"); break;
+      case  5: Serial.println("(MQTT_CONNECT_UNAUTHORIZED)"); break;
+      default: Serial.printf("(UNKNOWN_ERROR_%d)\n", state); break;
+    }
+    
+    mqttConnected = false;
+    mqttReconnectAttempts++;
+    
+    // Disable MQTT temporarily after too many failures
+    if (mqttReconnectAttempts >= 10) {
+      Serial.println("🚫 Too many MQTT failures, disabling for 5 minutes");
+      mqttEnabled = false;
+      // Re-enable after 5 minutes (handled in loop)
+    }
+    
+    return false;
+  }
+}
+
+/* ---------------- MQTT RECONNECTION HANDLER ---------------- */
+void handleMqttReconnection() {
+  unsigned long now = millis();
+  
+  // Re-enable MQTT after temporary disable
+  if (!mqttEnabled && mqttReconnectAttempts >= 10) {
+    if (now - lastMqttReconnect >= 300000) { // 5 minutes
+      Serial.println("🔄 Re-enabling MQTT after timeout");
+      mqttEnabled = true;
+      mqttReconnectAttempts = 0;
+    }
+  }
+  
+  // Attempt reconnection if needed and enabled
+  if (mqttEnabled && !mqttConnected && (now - lastMqttReconnect >= mqttReconnectInterval)) {
+    lastMqttReconnect = now;
+    Serial.println("🔄 Attempting MQTT reconnection...");
+    connectMQTT();
+  }
+}
+
+/* ---------------- MQTT PUBLISH FUNCTIONS ---------------- */
+bool publishMqttMessage(String topic, String payload, bool retained = false) {
+  if (!mqttConnected || !mqttClient.connected()) {
+    Serial.printf("❌ Cannot publish - MQTT not connected (topic: %s)\n", topic.c_str());
+    return false;
+  }
+  
+  bool success = mqttClient.publish(topic.c_str(), payload.c_str(), retained);
+  
+  if (success) {
+    Serial.printf("📤 MQTT Published - Topic: %s, Size: %d bytes\n", topic.c_str(), payload.length());
+  } else {
+    Serial.printf("❌ MQTT Publish failed - Topic: %s\n", topic.c_str());
+  }
+  
+  return success;
+}
+
+void sendMqttSensorData() {
+  if (!mqttConnected) {
+    Serial.println("⚠️ MQTT not connected, skipping sensor data");
+    return;
+  }
+  
+  // Create compact sensor data JSON (optimized for MQTT)
+  SensorData data = readAllSensors();
+  
+  StaticJsonDocument<256> doc;  // Smaller document size
+  doc["device_id"] = DEVICE_ID;
+  doc["temp"] = data.temperature;
+  doc["hum"] = data.humidity;
+  doc["soil"] = data.soilMoisture;
+  doc["water"] = data.waterLevel;
+  doc["light"] = data.lightLevel;
+  doc["distance"] = data.distance;
+  doc["motion"] = data.motionDetected ? 1 : 0;
+  doc["timestamp"] = millis();
+  
+  String payload;
+  serializeJson(doc, payload);
+  
+  Serial.printf("📡 MQTT Payload size: %d bytes - %s\n", payload.length(), payload.c_str());
+  
+  // Publish to sensor data topic
+  if (publishMqttMessage(TOPIC_SENSORS, payload)) {
+    Serial.println("✅ Sensor data published via MQTT");
+  }
+}
+
+void sendMqttStatus(String status) {
+  if (!mqttConnected) return;
+  
+  JsonDocument doc;
+  doc["device_id"] = DEVICE_ID;
+  doc["status"] = status;
+  doc["timestamp"] = millis();
+  doc["wifi_rssi"] = WiFi.RSSI();
+  doc["uptime_seconds"] = millis() / 1000;
+  doc["free_heap"] = ESP.getFreeHeap();
+  doc["mqtt_connected"] = mqttConnected;
+  
+  String payload;
+  serializeJson(doc, payload);
+  
+  publishMqttMessage(TOPIC_HEARTBEAT, payload, true); // Retained message
+}
+
+void acknowledgeMqttCommand(String commandId, String action) {
+  if (!mqttConnected) return;
+  
+  JsonDocument doc;
+  doc["command_id"] = commandId;
+  doc["device_id"] = DEVICE_ID;
+  doc["status"] = "completed";
+  doc["action"] = action;
+  doc["completed_at"] = millis();
+  
+  String payload;
+  serializeJson(doc, payload);
+  
+  publishMqttMessage(TOPIC_STATUS, payload);
+  Serial.printf("✅ MQTT Command acknowledged: %s\n", commandId.c_str());
+}
+
+void sendMqttEmergencyAlert() {
+  if (!mqttConnected) return;
+  
+  JsonDocument doc;
+  doc["device_id"] = DEVICE_ID;
+  doc["alert_type"] = "emergency_shutdown";
+  doc["timestamp"] = millis();
+  doc["uptime_seconds"] = millis() / 1000;
+  doc["wifi_rssi"] = WiFi.RSSI();
+  doc["trigger"] = "emergency_button";
+  
+  String payload;
+  serializeJson(doc, payload);
+  
+  publishMqttMessage(TOPIC_EMERGENCY, payload, true);
+  Serial.println("🚨 Emergency alert sent via MQTT");
 }
 
 /* ---------------- ULTRASONIC SENSOR FUNCTION ---------------- */
@@ -586,7 +993,7 @@ JsonDocument createAPIPayload() {
 /* ============================================================
    COMMAND EXECUTION
    ============================================================ */
-void executeAction(String action, int duration_ms = 3000) {
+void executeAction(String action, int duration_ms) {
   Serial.printf("⚡ Executing: %s (duration: %dms)\n", action.c_str(), duration_ms);
   
   // Convert action to uppercase for consistent comparison
@@ -702,52 +1109,67 @@ void sendSensorData() {
     return;
   }
   
-  HTTPClient http;
-  http.setTimeout(8000); // Increased timeout for cloud requests
-  http.setReuse(false);  // Don't reuse for cloud reliability
+  bool sentViaMqtt = false;
   
-  // Send to Vercel sensor-data endpoint
-  String url = String(API_BASE) + "/sensor-data";
-  
-  if (!http.begin(url)) {
-    apiFailures++;
-    Serial.println("❌ Failed to begin HTTP connection");
-    return;
-  }
-  
-  http.addHeader("Content-Type", "application/json");
-  
-  // Create sensor data payload matching your existing API format
-  SensorData data = readAllSensors();
-  StaticJsonDocument<512> doc;
-  
-  doc["device_id"] = DEVICE_ID;
-  doc["temperature"] = data.temperature;
-  doc["humidity"] = data.humidity;
-  doc["soil_moisture"] = data.soilMoisture;
-  doc["water_level"] = data.waterLevel;
-  doc["light_level"] = data.lightLevel;
-  doc["steam"] = data.steam;
-  doc["distance"] = data.distance;
-  doc["motion_detected"] = data.motionDetected ? 1 : 0;
-  
-  String payload;
-  serializeJson(doc, payload);
-  
-  Serial.printf("📤 Sending to cloud: %s\n", payload.c_str());
-  
-  int code = http.POST(payload);
-  
-  if (code > 0) {
-    String response = http.getString();
-    Serial.printf("📤 Cloud data sent → HTTP %d: %s\n", code, response.c_str());
-    apiFailures = 0; // Reset on success
+  // Try MQTT first (primary method)
+  if (mqttConnected && mqttClient.connected()) {
+    Serial.println("📡 Sending sensor data via MQTT...");
+    sendMqttSensorData();
+    sentViaMqtt = true;
+    apiFailures = 0; // Reset failures on successful MQTT
   } else {
-    apiFailures++;
-    Serial.printf("❌ Cloud POST failed: %s\n", http.errorToString(code).c_str());
+    Serial.println("⚠️ MQTT unavailable, falling back to HTTP...");
   }
   
-  http.end();
+  // HTTP fallback (or primary if MQTT disabled)
+  if (!sentViaMqtt || !mqttEnabled) {
+    HTTPClient http;
+    http.setTimeout(8000); // Increased timeout for cloud requests
+    http.setReuse(false);  // Don't reuse for cloud reliability
+    
+    // Send to Vercel sensor-data endpoint
+    String url = String(API_BASE) + "/sensor-data";
+    
+    if (!http.begin(url)) {
+      apiFailures++;
+      Serial.println("❌ Failed to begin HTTP connection");
+      return;
+    }
+    
+    http.addHeader("Content-Type", "application/json");
+    
+    // Create sensor data payload matching your existing API format
+    SensorData data = readAllSensors();
+    StaticJsonDocument<512> doc;
+    
+    doc["device_id"] = DEVICE_ID;
+    doc["temperature"] = data.temperature;
+    doc["humidity"] = data.humidity;
+    doc["soil_moisture"] = data.soilMoisture;
+    doc["water_level"] = data.waterLevel;
+    doc["light_level"] = data.lightLevel;
+    doc["steam"] = data.steam;
+    doc["distance"] = data.distance;
+    doc["motion_detected"] = data.motionDetected ? 1 : 0;
+    
+    String payload;
+    serializeJson(doc, payload);
+    
+    Serial.printf("📤 Sending to cloud (HTTP fallback): %s\n", payload.c_str());
+    
+    int code = http.POST(payload);
+    
+    if (code > 0) {
+      String response = http.getString();
+      Serial.printf("📤 Cloud data sent → HTTP %d: %s\n", code, response.c_str());
+      apiFailures = 0; // Reset on success
+    } else {
+      apiFailures++;
+      Serial.printf("❌ Cloud POST failed: %s\n", http.errorToString(code).c_str());
+    }
+    
+    http.end();
+  }
   
   // Failsafe: If too many failures, restart
   if (apiFailures >= MAX_API_FAILURES) {
@@ -760,6 +1182,15 @@ void sendSensorData() {
 void checkCommands() {
   if (WiFi.status() != WL_CONNECTED) return;
   
+  // Skip HTTP command polling if MQTT is connected (commands come via MQTT)
+  if (mqttConnected && mqttClient.connected()) {
+    // MQTT handles commands, just maintain connection
+    mqttClient.loop();
+    return;
+  }
+  
+  // HTTP command polling (fallback when MQTT unavailable)
+  Serial.println("📡 Using HTTP command polling (MQTT fallback)");
   HTTPClient http;
   http.setTimeout(2000); // Faster timeout for command checking
   http.setReuse(true);   // Reuse connection for faster commands
@@ -1013,7 +1444,8 @@ void setup() {
   
   // Emergency button pin (internal pull-up enabled)
   pinMode(EMERGENCY_PIN, INPUT_PULLUP);
-  Serial.println("🚨 Emergency button initialized on GPIO 0 (BOOT button)");
+  Serial.printf("🚨 Emergency button initialized on GPIO %d\n", EMERGENCY_PIN);
+  Serial.println("💡 Press and hold for 3 seconds to trigger emergency shutdown");
   
   // Set initial states
   digitalWrite(LEDPIN, LOW);
@@ -1062,6 +1494,25 @@ void setup() {
     Serial.println("✅ Web server started!");
     Serial.printf("🌐 Access at: http://%s\n", WiFi.localIP().toString().c_str());
     
+    // MQTT connection
+    Serial.println("🔧 Connecting to MQTT broker...");
+    if (connectMQTT()) {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("MQTT Connected!");
+      lcd.setCursor(0, 1);
+      lcd.print("Broker Online");
+      delay(2000);
+    } else {
+      Serial.println("⚠️ MQTT connection failed, will use HTTP fallback");
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("MQTT Failed");
+      lcd.setCursor(0, 1);
+      lcd.print("Using HTTP");
+      delay(2000);
+    }
+    
     systemReady = true;
   } else {
     lcd.clear();
@@ -1100,10 +1551,27 @@ void loop() {
     return;
   }
   
+  // Handle MQTT reconnection and keep-alive
+  if (mqttEnabled) {
+    handleMqttReconnection();
+    
+    if (mqttConnected && mqttClient.connected()) {
+      mqttClient.loop(); // Process incoming MQTT messages
+    } else {
+      mqttConnected = false;
+    }
+  }
+  
   // Send sensor data to cloud
   if (systemReady && now - lastSensorSend >= sensorInterval) {
     sendSensorData();
     lastSensorSend = now;
+  }
+  
+  // Send MQTT heartbeat
+  if (mqttConnected && now - lastMqttHeartbeat >= mqttHeartbeatInterval) {
+    sendMqttStatus("online");
+    lastMqttHeartbeat = now;
   }
   
   // Check for commands (ULTRA-FAST - 250ms interval)

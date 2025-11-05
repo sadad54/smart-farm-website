@@ -25,101 +25,47 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
   useEffect(() => {
     let mounted = true
 
-    // Cloud-based polling function - gets data from Supabase database
-    async function pollOnce() {
+    // Fast polling function for live MQTT sensor data
+    async function pollMqttData() {
       if (!mounted) return
 
       try {
-        // Get latest sensor data from database instead of ESP32 directly
-        const controller = new AbortController()
-        const timeoutId = setTimeout(() => controller.abort(), 8000) // 8 second timeout
-        
-        const res = await fetch('/api/sensor-readings/latest', {
-          cache: "no-store",
-          signal: controller.signal
+        const response = await fetch('/api/mqtt-sensor-data', {
+          cache: "no-store"
         })
         
-        clearTimeout(timeoutId)
-        
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`)
         }
         
-        const data = await res.json()
+        const result = await response.json()
         
-        if (data.readings && data.readings.length > 0) {
-          // Convert database readings to ESP state format
-          const latestReadings = data.readings.reduce((acc: any, reading: any) => {
-            acc[reading.metric] = reading.value
-            return acc
-          }, {})
-          
-          // Map to your existing state format
-          const newState: EspState = {
-            temperature: latestReadings.temperature || null,
-            humidity: latestReadings.humidity || null,
-            soilHumidity: latestReadings.soil_moisture || null,
-            waterLevel: latestReadings.water_level || null,
-            light: latestReadings.light_level || null,
-            steam: latestReadings.steam || null,
-            distance: latestReadings.distance || null,
-            motionDetected: latestReadings.motion_detected === 1,
-            raw: "cloud-database"
-          }
-          
-          setState(newState)
-          setConnected(true)
-          
-          console.log('📊 Cloud sensor data updated:', newState)
-          
+        if (result.data) {
+          console.log('📊 Live MQTT sensor data received:', result.data)
+          setState(result.data)
+          setConnected(result.connected)
         } else {
-          console.log('⚠️ No sensor readings found in database - using fallback')
-          setConnected(false)
-          
-          // Use mock data as fallback if no database readings
-          setState((s) => ({
-            temperature: ((s.temperature ?? 21) as number) + (Math.random() - 0.5) * 0.2,
-            humidity: ((s.humidity ?? 60) as number) + (Math.random() - 0.5) * 1,
-            waterLevel: ((s.waterLevel ?? 61) as number),
-            light: ((s.light ?? 43) as number) + Math.round((Math.random() - 0.5) * 2),
-          soilHumidity: ((s.soilHumidity ?? 40) as number) + Math.round((Math.random() - 0.5) * 2),
-          distance: ((s.distance ?? 12.8) as number) + Math.round((Math.random() - 0.5) * 0.5),
-          steam: ((s.steam ?? 0) as number),
-          motionDetected: Math.random() > 0.8, // Random motion for fallback
-          raw: "fallback-mock"
-          }))
+          console.log('⚠️ No MQTT sensor data available')
+          setConnected(result.connected || false)
         }
         
-      } catch (error: any) {
-        console.log('📡 Cloud polling error, using fallback:', error.message)
+      } catch (error) {
+        console.error('❌ Error fetching MQTT sensor data:', error)
         setConnected(false)
-        
-        // Use mock data if cloud fails
-        setState((s) => ({
-          temperature: ((s.temperature ?? 21) as number) + (Math.random() - 0.5) * 0.2,
-          humidity: ((s.humidity ?? 60) as number) + (Math.random() - 0.5) * 1,
-          waterLevel: ((s.waterLevel ?? 61) as number),
-          light: ((s.light ?? 43) as number) + Math.round((Math.random() - 0.5) * 2),
-          soilHumidity: ((s.soilHumidity ?? 40) as number) + Math.round((Math.random() - 0.5) * 2),
-          distance: ((s.distance ?? 12.8) as number) + Math.round((Math.random() - 0.5) * 0.5),
-          steam: ((s.steam ?? 0) as number),
-          motionDetected: Math.random() > 0.9, // Occasional motion for offline fallback
-          raw: "offline-fallback"
-        }))
       }
     }
 
-    // initial poll immediately
-    pollOnce()
-    // set interval
-    const id = window.setInterval(pollOnce, pollInterval)
-    pollRef.current = id
+    // Initial poll immediately  
+    pollMqttData()
+    
+    // Set up fast polling for real-time updates (every 2 seconds)
+    const pollInterval = setInterval(pollMqttData, 2000)
 
     return () => {
       mounted = false
-      if (pollRef.current) window.clearInterval(pollRef.current)
+      clearInterval(pollInterval)
     }
-  }, [pollInterval])
+  }, [])
 
   // Cloud-based command sending function with fast response
   async function sendCommand(value: string, location?: string, metadata?: any) {

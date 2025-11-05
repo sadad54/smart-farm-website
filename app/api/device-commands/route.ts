@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
+import smartFarmMQTT from '@/lib/mqtt-client'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -103,6 +104,19 @@ export async function POST(request: NextRequest) {
       // Don't fail the command queuing if history logging fails
     }
     
+    // Also send the command via MQTT to the ESP32
+    try {
+      const commandId = smartFarmMQTT.sendCommand(action, duration_ms);
+      if (commandId) {
+        console.log(`📡 MQTT command sent successfully: ${action} (ID: ${commandId})`);
+      } else {
+        console.error('❌ MQTT command failed - not connected');
+      }
+    } catch (mqttError) {
+      console.error('❌ Error sending MQTT command:', mqttError);
+      // Continue even if MQTT fails - we still have the database command
+    }
+
     console.log(`✅ Command queued successfully: ID ${commandData.id}`)
     
     return NextResponse.json({
