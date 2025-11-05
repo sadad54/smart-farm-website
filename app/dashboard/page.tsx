@@ -1,7 +1,7 @@
 "use client"
 
 import Image from "next/image"
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useEspContext } from "@/components/EspProvider"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { Card } from "@/components/ui/card"
@@ -15,6 +15,66 @@ const poppins = Poppins({
 export default function DashboardPage() {
   const { state, connected, sendCommand } = useEspContext()
   const lastHealthLogRef = useRef<number>(0)
+  
+  // Device status states
+  const [lightOn, setLightOn] = useState(false)
+  const [fanOn, setFanOn] = useState(false) 
+  const [waterOn, setWaterOn] = useState(false)
+
+  // Status indicator component
+  const StatusIndicator = ({ isOn, label }: { isOn: boolean; label: string }) => (
+    <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/20 backdrop-blur-sm">
+      <div className={`w-2 h-2 rounded-full transition-all duration-300 ${
+        isOn ? 'bg-green-400 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse' : 'bg-red-400'
+      }`}></div>
+      <span className={`text-xs font-medium ${
+        isOn ? 'text-green-100' : 'text-red-100'
+      }`}>
+        {label} {isOn ? 'ON' : 'OFF'}
+      </span>
+    </div>
+  )
+
+  // Enhanced command functions with state management
+  const handleLightCommand = async () => {
+    try {
+      await sendCommand('A', 'dashboard', { button_type: 'toggle_light' })
+      setLightOn(!lightOn)
+      console.log(`💡 Light turned ${!lightOn ? 'ON' : 'OFF'}`)
+    } catch (error) {
+      console.error('Failed to toggle light:', error)
+    }
+  }
+
+  const handleFanCommand = async () => {
+    try {
+      await sendCommand('B', 'dashboard', { button_type: 'run_fan' })
+      setFanOn(true)
+      console.log('🌪️ Fan turned ON')
+      // Auto turn off after 30 seconds
+      setTimeout(() => {
+        setFanOn(false)
+        console.log('🌪️ Fan turned OFF (auto)')
+      }, 30000)
+    } catch (error) {
+      console.error('Failed to run fan:', error)
+    }
+  }
+
+  const handleWaterCommand = async () => {
+    try {
+      await sendCommand('D', 'dashboard', { button_type: 'water_plant' })
+      setWaterOn(true)
+      console.log('💧 Water pump turned ON')
+      // Auto turn off after 3 seconds (typical watering duration)
+      setTimeout(() => {
+        setWaterOn(false)
+        console.log('💧 Water pump turned OFF (auto)')
+      }, 3000)
+    } catch (error) {
+      console.error('Failed to water plant:', error)
+    }
+  }
 
   // Function to round values to nearest 0.5
   const roundToHalf = (value: number): string => {
@@ -309,18 +369,60 @@ export default function DashboardPage() {
   
 
 </div>
+        {/* Device Status Indicators */}
+        <div className="flex gap-4 justify-center mb-6">
+          <StatusIndicator isOn={lightOn} label="Light" />
+          <StatusIndicator isOn={fanOn} label="Fan" />
+          <StatusIndicator isOn={waterOn} label="Water" />
+        </div>
+
         <div className="flex gap-4 justify-center">
-          {/* Water Plant button: public/images/buttons/water-plant-button.png */}
-          <div className="relative w-56 h-20 hover:scale-105 transition-transform cursor-pointer">
-            <Image src="SMART FARM/PAGE 4/4x/Asset 59@4x.png" alt="Water Plant" fill className="object-contain" onClick={() => sendCommand('D', 'dashboard', { button_type: 'water_plant' })} />
+          {/* Water Plant button with enhanced styling */}
+          <div className={`relative w-56 h-20 hover:scale-105 transition-all duration-300 cursor-pointer ${
+            waterOn ? 'filter brightness-125 drop-shadow-[0_0_15px_rgba(59,130,246,0.6)]' : ''
+          }`}>
+            <Image 
+              src="SMART FARM/PAGE 4/4x/Asset 59@4x.png" 
+              alt="Water Plant" 
+              fill 
+              className="object-contain" 
+              onClick={handleWaterCommand} 
+            />
+            {waterOn && (
+              <div className="absolute top-1 right-1 w-3 h-3 bg-blue-400 rounded-full animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.8)]"></div>
+            )}
           </div>
-          {/* Run Fan button: public/images/buttons/run-fan-button.png */}
-          <div className="relative w-56 h-20 hover:scale-105 transition-transform cursor-pointer">
-            <Image src="SMART FARM/PAGE 4/4x/Asset 58@4x.png" alt="Run Fan" fill className="object-contain" onClick={() => sendCommand('B', 'dashboard', { button_type: 'run_fan' })} />
+          
+          {/* Run Fan button with enhanced styling */}
+          <div className={`relative w-56 h-20 hover:scale-105 transition-all duration-300 cursor-pointer ${
+            fanOn ? 'filter brightness-125 drop-shadow-[0_0_15px_rgba(34,197,94,0.6)]' : ''
+          }`}>
+            <Image 
+              src="SMART FARM/PAGE 4/4x/Asset 58@4x.png" 
+              alt="Run Fan" 
+              fill 
+              className="object-contain" 
+              onClick={handleFanCommand} 
+            />
+            {fanOn && (
+              <div className="absolute top-1 right-1 w-3 h-3 bg-green-400 rounded-full animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.8)]"></div>
+            )}
           </div>
-          {/* Toggle Light button: public/images/buttons/toggle-light-button.png */}
-          <div className="relative w-56 h-20 hover:scale-105 transition-transform cursor-pointer">
-            <Image src="SMART FARM/PAGE 4/4x/Asset 57@4x.png" alt="Toggle Light" fill className="object-contain" onClick={() => sendCommand('A')} />
+          
+          {/* Toggle Light button with enhanced styling */}
+          <div className={`relative w-56 h-20 hover:scale-105 transition-all duration-300 cursor-pointer ${
+            lightOn ? 'filter brightness-125 drop-shadow-[0_0_15px_rgba(255,255,0,0.6)]' : ''
+          }`}>
+            <Image 
+              src="SMART FARM/PAGE 4/4x/Asset 57@4x.png" 
+              alt="Toggle Light" 
+              fill 
+              className="object-contain" 
+              onClick={handleLightCommand} 
+            />
+            {lightOn && (
+              <div className="absolute top-1 right-1 w-3 h-3 bg-yellow-400 rounded-full animate-pulse shadow-[0_0_8px_rgba(255,255,0,0.8)]"></div>
+            )}
           </div>
         </div>
           {/* Farmer Robot Asset - positioned in bottom-right corner */}

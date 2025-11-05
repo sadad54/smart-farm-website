@@ -5,7 +5,6 @@ import { useState, useEffect } from "react"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { Card } from "@/components/ui/card"
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { supabase } from '@/lib/supabase'
 import { useEspContext } from "@/components/EspProvider"
 import { ChevronLeft, ChevronRight, Brain, TrendingUp, AlertTriangle, CheckCircle } from "lucide-react"
 import { Poppins } from "next/font/google";
@@ -14,14 +13,6 @@ const poppins = Poppins({
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
 });
-
-type SensorReading = {
-  id: number
-  device_id: string
-  metric: string
-  value: number
-  timestamp: string
-}
 
 type ChartDataPoint = {
   time: string
@@ -112,10 +103,10 @@ export default function AIInsightsPage() {
     }
   ]
 
-  // Fetch historical sensor data
+  // Fetch live MQTT sensor data
   useEffect(() => {
     fetchSensorData()
-    const interval = setInterval(fetchSensorData, 30000) // Refresh every 30 seconds
+    const interval = setInterval(fetchSensorData, 5000) // Refresh every 5 seconds for real-time updates
     return () => clearInterval(interval)
   }, [])
 
@@ -128,35 +119,46 @@ export default function AIInsightsPage() {
 
   const fetchSensorData = async () => {
     try {
-      const { data: sensorData, error } = await supabase
-        .from('sensor_readings')
-        .select('*')
-        .eq('device_id', 'farm_001')
-        .order('timestamp', { ascending: false })
-        .limit(200) // Increased from 50 to 200 for longer time period
-
-      if (error) throw error
-
-      // Group data by timestamp and combine metrics
-      const groupedData: { [key: string]: ChartDataPoint } = {}
+      // Get live MQTT sensor data
+      const response = await fetch('/api/mqtt-sensor-data', {
+        cache: "no-store"
+      })
       
-      sensorData?.forEach(reading => {
-        const time = new Date(reading.timestamp).toLocaleTimeString('en-US', { 
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+      
+      const result = await response.json()
+      
+      if (result.data) {
+        // Create current data point from live MQTT data
+        const currentTime = new Date().toLocaleTimeString('en-US', { 
           hour: '2-digit', 
           minute: '2-digit' 
         })
         
-        if (!groupedData[time]) {
-          groupedData[time] = { time }
+        const newDataPoint: ChartDataPoint = {
+          time: currentTime,
+          temperature: result.data.temperature,
+          humidity: result.data.humidity,
+          soil_moisture: result.data.soilHumidity,
+          light_level: result.data.light,
+          water_level: result.data.waterLevel
         }
         
-        groupedData[time][reading.metric] = reading.value
-      })
-
-      const chartPoints = Object.values(groupedData).reverse().slice(-60) // Increased from 20 to 60 data points
-      setChartData(chartPoints)
+        // Update chart data - keep last 60 points for smooth scrolling graph
+        setChartData(prevData => {
+          const newData = [...prevData, newDataPoint]
+          // Keep only the last 60 data points to prevent memory issues
+          return newData.slice(-60)
+        })
+        
+        console.log('📊 AI Insights updated with live MQTT data:', newDataPoint)
+      } else {
+        console.log('⚠️ No MQTT sensor data available for AI Insights')
+      }
     } catch (error) {
-      console.error('Error fetching sensor data:', error)
+      console.error('❌ Error fetching MQTT sensor data for AI Insights:', error)
     } finally {
       setLoading(false)
     }
