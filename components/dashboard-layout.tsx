@@ -64,6 +64,12 @@ const navItems = [
       "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Asset%20157%404x-qAHRHqBsYJ1UvtMoNdjbnFPhfih4Ef.png",
           activeImage:"SMART FARM/navbar_selcted/Asset35@4x.png"
   },
+  {
+    label: "AI Automation",
+    href: "/automation",
+    image: "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Asset%20158%404x-gz6GEwkSfwHKns4nMIBQhoih1di13q.png",
+    activeImage:"SMART FARM/navbar_selcted/Asset36@4x.png"
+  },
 ]
 
 export function DashboardLayout({ children }: { children: React.ReactNode }) {

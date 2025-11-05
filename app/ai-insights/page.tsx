@@ -6,6 +6,7 @@ import { DashboardLayout } from "@/components/dashboard-layout"
 import { Card } from "@/components/ui/card"
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { useEspContext } from "@/components/EspProvider"
+import { AIPlantHealthAnalysis } from "@/components/AIPlantHealthAnalysis"
 import { ChevronLeft, ChevronRight, Brain, TrendingUp, AlertTriangle, CheckCircle } from "lucide-react"
 import { Poppins } from "next/font/google";
 
@@ -393,90 +394,11 @@ export default function AIInsightsPage() {
             </Card>
 
           {/* AI Analytics Card */}
-          <Card className="bg-gradient-to-br from-blue-100 to-indigo-200 backdrop-blur-sm rounded-3xl p-6 border-4 border-indigo-400 h-[500px]">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="p-3 bg-indigo-600 rounded-full">
-                  <Brain className="w-8 h-8 text-white" />
-                </div>
-                <h3 className={`${poppins.className} text-2xl font-bold text-indigo-900`}>
-                  AI Analytics
-                </h3>
-              </div>
-
-              <div className="bg-white/90 rounded-2xl p-6 h-[420px] overflow-y-auto">
-                {/* Plant Health Score */}
-                <div className="mb-6">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-lg font-semibold text-gray-800">Plant Health Score</span>
-                    <div className="flex items-center gap-2">
-                      {aiInsights.status === 'excellent' && <CheckCircle className="w-5 h-5 text-green-600" />}
-                      {aiInsights.status === 'good' && <TrendingUp className="w-5 h-5 text-blue-600" />}
-                      {(aiInsights.status === 'fair' || aiInsights.status === 'poor' || aiInsights.status === 'critical') && 
-                        <AlertTriangle className="w-5 h-5 text-yellow-600" />}
-                      <span className={`text-2xl font-bold ${
-                        aiInsights.status === 'excellent' ? 'text-green-600' :
-                        aiInsights.status === 'good' ? 'text-blue-600' :
-                        aiInsights.status === 'fair' ? 'text-yellow-600' :
-                        aiInsights.status === 'poor' ? 'text-orange-600' : 'text-red-600'
-                      }`}>
-                        {aiInsights.score}%
-                      </span>
-                    </div>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-3 mb-2">
-                    <div 
-                      className={`h-3 rounded-full transition-all duration-500 ${
-                        aiInsights.status === 'excellent' ? 'bg-green-500' :
-                        aiInsights.status === 'good' ? 'bg-blue-500' :
-                        aiInsights.status === 'fair' ? 'bg-yellow-500' :
-                        aiInsights.status === 'poor' ? 'bg-orange-500' : 'bg-red-500'
-                      }`}
-                      style={{ width: `${aiInsights.score}%` }}
-                    />
-                  </div>
-                  <span className={`text-sm font-medium capitalize ${
-                    aiInsights.status === 'excellent' ? 'text-green-700' :
-                    aiInsights.status === 'good' ? 'text-blue-700' :
-                    aiInsights.status === 'fair' ? 'text-yellow-700' :
-                    aiInsights.status === 'poor' ? 'text-orange-700' : 'text-red-700'
-                  }`}>
-                    {aiInsights.status} Condition
-                  </span>
-                </div>
-
-                {/* AI Recommendations */}
-                <div className="mb-6">
-                  <h4 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                    <Brain className="w-5 h-5 text-indigo-600" />
-                    AI Recommendations
-                  </h4>
-                  <div className="space-y-2">
-                    {aiInsights.recommendations.map((rec, index) => (
-                      <div key={index} className="bg-indigo-50 border-l-4 border-indigo-400 p-3 rounded-r-lg">
-                        <p className="text-sm text-gray-700 font-medium">{rec}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Trend Analysis */}
-                <div>
-                  <h4 className="text-lg font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-green-600" />
-                    Trend Analysis
-                  </h4>
-                  <div className="space-y-2">
-                    {aiInsights.trends.map((trend, index) => (
-                      <div key={index} className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
-                        <div className="w-2 h-2 bg-gray-400 rounded-full flex-shrink-0" />
-                        <p className="text-sm text-gray-700">{trend}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </Card>
+         <AIPlantHealthAnalysis />
           </div>
+
+          {/* AI Plant Health Analysis */}
+          
 
           {/* Badges Card */}
           <Card className="bg-yellow-100/90 backdrop-blur-sm rounded-3xl p-6 border-4 border-yellow-400 absolute bottom-[10px]">

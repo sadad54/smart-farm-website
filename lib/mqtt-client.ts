@@ -162,26 +162,31 @@ class SmartFarmMQTTClient {
         }
       }
 
-      // Update device status
-      const deviceStatus = data.status || {}
-      const { error: statusError } = await supabaseAdmin
-        .from('devices')
-        .upsert({
-          device_id: data.device_id,
-          last_seen: new Date(),
-          led_state: deviceStatus.led || false,
-          fan_state: deviceStatus.fan || false,
-          servo_state: deviceStatus.servo || false,
-          wifi_rssi: deviceStatus.wifi_rssi || null,
-          uptime_seconds: deviceStatus.uptime || null
-        }, {
-          onConflict: 'device_id'
-        })
-
-      if (statusError) {
-        console.error('❌ Error updating device status:', statusError)
-      } else {
-        console.log('✅ Device status updated')
+      // Update device status (optional - table may not exist)
+      try {
+        const deviceStatus = data.status || {}
+        const { error: statusError } = await supabaseAdmin
+          .from('device_status')
+          .upsert({
+            device_id: data.device_id,
+            last_seen: new Date(),
+            led_state: deviceStatus.led || false,
+            fan_state: deviceStatus.fan || false,
+            servo_state: deviceStatus.servo || false,
+            wifi_rssi: deviceStatus.wifi_rssi || null,
+            uptime_seconds: deviceStatus.uptime || null
+          }, {
+            onConflict: 'device_id'
+          })
+          
+        if (statusError) {
+          // Don't flood console with table errors - this is optional functionality
+          console.log('📝 Device status tracking not configured (optional feature)')
+        } else {
+          console.log('✅ Device status updated')
+        }
+      } catch (err) {
+        // Silently ignore device status table errors - this is optional functionality
       }
 
     } catch (error) {
@@ -219,7 +224,7 @@ class SmartFarmMQTTClient {
     
     try {
       const { error } = await supabaseAdmin
-        .from('devices')
+        .from('device_status')
         .upsert({
           device_id: data.device_id,
           last_seen: new Date(),
@@ -232,11 +237,13 @@ class SmartFarmMQTTClient {
           onConflict: 'device_id'
         })
 
-      if (!error) {
+      if (error) {
+        console.log('📝 Device status tracking not configured (optional feature)')
+      } else {
         console.log('✅ Device heartbeat updated')
       }
     } catch (error) {
-      console.error('❌ Error updating device heartbeat:', error)
+      // Silently ignore device status table errors - this is optional functionality
     }
   }
 

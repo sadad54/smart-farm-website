@@ -14,6 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Textarea } from "@/components/ui/textarea"
 import { useEspContext } from "@/components/EspProvider"
 import { supabase } from "@/lib/supabase"
+import { PredictiveWateringAssistant } from "@/components/PredictiveWateringAssistant"
 import { Poppins } from "next/font/google"
 import { Calendar, Trash2, Edit, Play, Clock } from 'lucide-react'
 
@@ -280,35 +281,43 @@ export default function WaterPage() {
       <div className="space-y-6">
         <h2 className="text-3xl font-bold text-white ml-265">Water</h2>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-          {/* Left: Robot image and buttons */}
-          <div className="w-full flex flex-col items-center">
-            <div className="absolute bottom-[40px] w-176 h-200 pointer-events-none">
-              <Image
-                src="/SMART FARM/PAGE 10/4x/Asset 136@4x.png"
-                alt="Robot Asset"
-                fill
-                className="object-contain"
-              />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Left: AI Watering Assistant and Robot */}
+          <div className="w-full flex flex-col gap-6">
+            {/* AI Watering Assistant Card */}
+            <div className="mb-8">
+              <PredictiveWateringAssistant />
             </div>
-
-            {/* Buttons row under the robot image */}
-            <div className="mt-6 flex gap-4">
-              <div className="absolute bottom-[5px] left-[60px] w-90 h-40 hover:scale-105 transition-transform cursor-pointer" onClick={() => handleWatering('D', 'main_crops')}>
+            
+            {/* Robot image and buttons */}
+            <div className="flex flex-col items-center relative">
+              <div className="relative w-176 h-200 mb-6">
                 <Image
-                  src="/SMART FARM/PAGE 10/4x/Asset 138@4x.png"
-                  alt="Water Crops Button"
+                  src="/SMART FARM/PAGE 10/4x/Asset 136@4x.png"
+                  alt="Robot Asset"
                   fill
                   className="object-contain"
                 />
               </div>
-              <div className="absolute bottom-[5px] left-[440px] w-90 h-40 hover:scale-105 transition-transform cursor-pointer" onClick={() => setShowScheduleModal(true)}>
-                <Image
-                  src="/SMART FARM/PAGE 10/4x/Asset 179@4x.png"
-                  alt="Schedule Watering Button"
-                  fill
-                  className="object-contain"
-                />
+
+              {/* Buttons row under the robot image */}
+              <div className="flex gap-8 justify-center">
+                <div className="relative w-90 h-40 hover:scale-105 transition-transform cursor-pointer" onClick={() => handleWatering('D', 'main_crops')}>
+                  <Image
+                    src="/SMART FARM/PAGE 10/4x/Asset 138@4x.png"
+                    alt="Water Crops Button"
+                    fill
+                    className="object-contain"
+                  />
+                </div>
+                <div className="relative w-90 h-40 hover:scale-105 transition-transform cursor-pointer" onClick={() => setShowScheduleModal(true)}>
+                  <Image
+                    src="/SMART FARM/PAGE 10/4x/Asset 179@4x.png"
+                    alt="Schedule Watering Button"
+                    fill
+                    className="object-contain"
+                  />
+                </div>
               </div>
             </div>
           </div>

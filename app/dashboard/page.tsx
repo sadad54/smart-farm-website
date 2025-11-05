@@ -5,6 +5,8 @@ import { useEffect, useRef, useState } from "react"
 import { useEspContext } from "@/components/EspProvider"
 import { DashboardLayout } from "@/components/dashboard-layout"
 import { Card } from "@/components/ui/card"
+import { SmartFarmAssistant } from "@/components/SmartFarmAssistant"
+import { SmartAlerts } from "@/components/SmartAlerts"
 import { Poppins } from "next/font/google";
 
 const poppins = Poppins({
@@ -462,6 +464,11 @@ export default function DashboardPage() {
             />
           </div>
       </div>
+      
+      
+      
+      {/* Smart Farm Assistant Chatbot */}
+      <SmartFarmAssistant />
     </DashboardLayout>
   )
 }
