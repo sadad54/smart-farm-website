@@ -220,6 +220,76 @@ bool readPirMotion() {
   return pirMotionDetected;
 }
 
+/* ---------------- COMBINED MOTION DETECTION SYSTEM ---------------- */
+static bool combinedDetectionActive = false;
+static unsigned long lastCombinedTrigger = 0;
+static unsigned long buzzerStartTime = 0;
+static bool buzzerActive = false;
+
+bool checkCombinedMotionDetection(float currentDistance, bool pirDetected) {
+  unsigned long currentTime = millis();
+  bool detectionTriggered = false;
+  
+  // Combined detection logic:
+  // 1. PIR motion detected AND distance < 25cm (close object)
+  // 2. OR sudden distance change (object approaching rapidly)
+  static float lastDistance = 999.0;
+  float distanceChange = abs(currentDistance - lastDistance);
+  
+  bool ultrasonicTriggered = (currentDistance > 0 && currentDistance < 25.0); // Object within 25cm
+  bool rapidApproach = (distanceChange > 15.0 && currentDistance < lastDistance); // Rapid approach
+  
+  // Trigger conditions
+  if ((pirDetected && ultrasonicTriggered) || 
+      (pirDetected && rapidApproach) ||
+      (ultrasonicTriggered && rapidApproach)) {
+    
+    if (!combinedDetectionActive || (currentTime - lastCombinedTrigger > 3000)) {
+      combinedDetectionActive = true;
+      lastCombinedTrigger = currentTime;
+      detectionTriggered = true;
+      
+      // Start buzzer alarm
+      buzzerActive = true;
+      buzzerStartTime = currentTime;
+      digitalWrite(BUZZERPIN, HIGH);
+      
+      Serial.println("🚨🚨 COMBINED DETECTION TRIGGERED! 🚨🚨");
+      Serial.printf("   PIR: %s | Distance: %.1fcm | Rapid Approach: %s\n", 
+                    pirDetected ? "ACTIVE" : "inactive",
+                    currentDistance,
+                    rapidApproach ? "YES" : "no");
+    }
+  }
+  
+  // Auto-clear detection after 8 seconds of no triggers
+  if (combinedDetectionActive && (currentTime - lastCombinedTrigger > 8000)) {
+    combinedDetectionActive = false;
+    Serial.println("✅ Combined detection cleared - All systems normal");
+  }
+  
+  // Manage buzzer (beep pattern: 500ms on, 200ms off for 5 seconds)
+  if (buzzerActive) {
+    if (currentTime - buzzerStartTime > 5000) {
+      // Stop buzzer after 5 seconds
+      buzzerActive = false;
+      digitalWrite(BUZZERPIN, LOW);
+      Serial.println("🔇 Buzzer alarm stopped");
+    } else {
+      // Create beeping pattern
+      unsigned long buzzerElapsed = currentTime - buzzerStartTime;
+      if ((buzzerElapsed % 700) < 500) {
+        digitalWrite(BUZZERPIN, HIGH); // Beep
+      } else {
+        digitalWrite(BUZZERPIN, LOW);  // Silent
+      }
+    }
+  }
+  
+  lastDistance = currentDistance;
+  return combinedDetectionActive;
+}
+
 /* ---------------- EMERGENCY SHUTDOWN FUNCTION ---------------- */
 void checkEmergencyButton() {
   static unsigned long lastDebounceTime = 0;
@@ -888,7 +958,10 @@ SensorData readAllSensors() {
   data.distance = readUltrasonicDistance();
   
   // Read PIR Motion Sensor
-  data.motionDetected = readPirMotion();
+  bool pirDetected = readPirMotion();
+  
+  // Use Combined Motion Detection System
+  data.motionDetected = checkCombinedMotionDetection(data.distance, pirDetected);
   
   return data;
 }

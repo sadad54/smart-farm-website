@@ -19,6 +19,8 @@ export default function MotionSensorCard() {
   const [motionDetected, setMotionDetected] = useState(false)
   const [lastMotionEvent, setLastMotionEvent] = useState<MotionEvent | null>(null)
   const [motionIntensity, setMotionIntensity] = useState(75)
+  const [combinedDetection, setCombinedDetection] = useState(false)
+  const [detectionType, setDetectionType] = useState<'none' | 'pir' | 'ultrasonic' | 'combined'>('none')
 
   // Real-time motion detection from ESP and database
   useEffect(() => {
@@ -43,22 +45,41 @@ export default function MotionSensorCard() {
     const motionCheckInterval = setInterval(() => {
       // Check if we have real sensor data from ESP
       if (state.motionDetected !== undefined && state.motionDetected !== null) {
-        // Use actual PIR sensor data from ESP
+        // Use actual combined detection data from ESP
         const currentMotion = Boolean(state.motionDetected)
+        const distance = state.distance || 999
+        
+        // Determine detection type based on sensor correlation
+        let newDetectionType: 'none' | 'pir' | 'ultrasonic' | 'combined' = 'none'
+        let confidence = 50
+        
+        if (currentMotion && distance < 25) {
+          // Combined detection: Both PIR and close distance
+          newDetectionType = 'combined'
+          confidence = 95
+          setCombinedDetection(true)
+        } else if (currentMotion) {
+          // PIR only detection
+          newDetectionType = 'pir'
+          confidence = 75
+        } else if (distance < 30) {
+          // Ultrasonic only detection
+          newDetectionType = 'ultrasonic'
+          confidence = 60
+        }
+        
         if (currentMotion !== motionDetected) {
           setMotionDetected(currentMotion)
-          // Calculate confidence based on distance sensor correlation
-          const distance = state.distance || 999
-          let confidence = 75
-          if (currentMotion && distance < 20) {
-            confidence = 95 // High confidence when PIR + close distance
-          } else if (currentMotion && distance < 50) {
-            confidence = 85 // Medium confidence when PIR + medium distance  
-          }
+          setDetectionType(newDetectionType)
           setMotionIntensity(confidence)
           
-          // Log the motion event with sensor correlation
-          logMotionEvent(currentMotion, distance, confidence)
+          // Log the motion event with enhanced sensor correlation
+          logMotionEvent(currentMotion, distance, confidence, newDetectionType)
+        }
+        
+        // Reset combined detection after 5 seconds
+        if (combinedDetection && !currentMotion) {
+          setTimeout(() => setCombinedDetection(false), 5000)
         }
       } else {
         // Fallback to simulation if no ESP data
@@ -97,7 +118,7 @@ export default function MotionSensorCard() {
     }
   }
 
-  const logMotionEvent = async (detected: boolean, distance?: number, confidence?: number) => {
+  const logMotionEvent = async (detected: boolean, distance?: number, confidence?: number, detectionType?: string) => {
     try {
       const animalTypes = ['chicken', 'butterfly', 'rabbit', 'bird', 'unknown']
       const randomAnimal = detected ? animalTypes[Math.floor(Math.random() * animalTypes.length)] : null
@@ -107,12 +128,13 @@ export default function MotionSensorCard() {
       const ultrasonicTriggered = detected && distance !== undefined && distance < 30 // Close distance indicates object
       const confidenceScore = confidence || motionIntensity
 
-      console.log('📝 Logging motion event:', { 
+      console.log('📝 Logging enhanced motion event:', { 
         detected, 
         distance, 
         pirTriggered, 
         ultrasonicTriggered, 
-        confidenceScore 
+        confidenceScore,
+        detectionType 
       })
 
       await supabase
@@ -121,7 +143,7 @@ export default function MotionSensorCard() {
           {
             device_id: 'farm_001',
             motion_detected: detected,
-            sensor_type: ultrasonicTriggered ? 'combined' : 'PIR',
+            sensor_type: detectionType || (ultrasonicTriggered ? 'combined' : 'PIR'),
             distance_cm: distance || null,
             pir_triggered: pirTriggered,
             ultrasonic_triggered: ultrasonicTriggered,
@@ -129,10 +151,12 @@ export default function MotionSensorCard() {
             confidence_score: confidenceScore,
             sensor_data: {
               esp_raw_distance: distance,
-              detection_source: 'motion_sensor_card',
+              detection_source: 'enhanced_motion_sensor_card',
+              detection_type: detectionType,
+              combined_detection: detectionType === 'combined',
               timestamp: new Date().toISOString()
             },
-            alarm_triggered: false, // Card doesn't trigger alarms directly
+            alarm_triggered: detectionType === 'combined', // Trigger alarm for combined detection
             timestamp: new Date().toISOString()
           }
         ])
@@ -196,14 +220,44 @@ export default function MotionSensorCard() {
           </div>
         </div>
 
-        {/* Combined Detection Status */}
-        {motionDetected && state.distance && state.distance < 30 && (
-          <div className="p-2 rounded-lg bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-300">
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
-              <h4 className="font-medium text-purple-800 text-sm">🎯 Dual Sensor Lock</h4>
+        {/* Enhanced Combined Detection Status */}
+        {detectionType === 'combined' && (
+          <div className="p-3 rounded-lg bg-gradient-to-r from-red-50 to-orange-50 border-2 border-red-400 shadow-md">
+            <div className="flex items-center gap-2 mb-1">
+              <div className="w-3 h-3 rounded-full bg-red-500 animate-pulse" />
+              <h4 className="font-bold text-red-800 text-sm">🚨 DUAL SENSOR LOCK ACTIVATED</h4>
             </div>
-            <p className="text-xs text-purple-600 ml-4">PIR + Distance correlation confirmed</p>
+            <p className="text-xs text-red-700 ml-5 font-medium">
+              PIR Motion + Close Distance ({state.distance?.toFixed(1)}cm) - High Threat Level!
+            </p>
+            <div className="flex gap-2 mt-2 ml-5">
+              <span className="text-xs bg-red-200 text-red-800 px-2 py-1 rounded-full">🔊 Buzzer Active</span>
+              <span className="text-xs bg-orange-200 text-orange-800 px-2 py-1 rounded-full">📸 Recording</span>
+            </div>
+          </div>
+        )}
+        
+        {/* PIR Only Detection */}
+        {detectionType === 'pir' && (
+          <div className="p-2 rounded-lg bg-gradient-to-r from-orange-50 to-yellow-50 border border-orange-300">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
+              <h4 className="font-medium text-orange-800 text-sm">👁️ PIR Motion Detected</h4>
+            </div>
+            <p className="text-xs text-orange-600 ml-4">Movement in sensor range - monitoring distance</p>
+          </div>
+        )}
+        
+        {/* Ultrasonic Only Detection */}
+        {detectionType === 'ultrasonic' && (
+          <div className="p-2 rounded-lg bg-gradient-to-r from-yellow-50 to-amber-50 border border-yellow-300">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-yellow-500" />
+              <h4 className="font-medium text-yellow-800 text-sm">📏 Object Proximity Alert</h4>
+            </div>
+            <p className="text-xs text-yellow-700 ml-4">
+              Object at {state.distance?.toFixed(1)}cm - awaiting motion confirmation
+            </p>
           </div>
         )}
       </div>
@@ -216,32 +270,55 @@ export default function MotionSensorCard() {
             <Image
               src={
                 motionDetected
-                  ? "SMART FARM/PAGE 8/4x/Asset 111@4x.png" // 🔹 Replace this placeholder when ready
-                  : "SMART FARM/PAGE 8/4x/Asset 175@4x.png"
+                  ? "SMART FARM/PAGE 8/4x/Asset 111@4x.png" // Detection state
+                  : "SMART FARM/PAGE 8/4x/Asset 175@4x.png"  // Idle state
               }
-              alt={motionDetected ? "Motion Detected Robot" : "Idle Robot"}
+              alt={motionDetected ? "Motion Detected" : "Monitoring Mode"}
               fill
-              className={`object-contain ${
-                motionDetected ? "scale-105" : "opacity-90"
+              className={`object-contain transition-all duration-300 ${
+                detectionType === 'combined' ? "scale-110 animate-pulse" :
+                detectionType !== 'none' ? "scale-105" : "opacity-90"
               }`}
             />
+            
+            {/* Detection type indicator overlay */}
+            {detectionType !== 'none' && (
+              <div className={`absolute -top-2 -right-2 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold animate-pulse ${
+                detectionType === 'combined' ? 'bg-red-500 text-white' :
+                detectionType === 'pir' ? 'bg-orange-500 text-white' :
+                'bg-yellow-500 text-black'
+              }`}>
+                {detectionType === 'combined' ? '🚨' :
+                 detectionType === 'pir' ? '👁️' : '📏'}
+              </div>
+            )}
           </div>
         </div>
 
         {/* Right side: AI status */}
         <div
           className={`flex-1 rounded-2xl p-8 flex flex-col items-center justify-center transition-all duration-500 ${
-            motionDetected
-              ? "bg-red-300/80 border-4 border-red-500 animate-pulse"
+            detectionType === 'combined'
+              ? "bg-red-400/90 border-4 border-red-600 animate-pulse shadow-lg shadow-red-500/50"
+              : detectionType === 'pir'
+              ? "bg-orange-300/80 border-4 border-orange-500"
+              : detectionType === 'ultrasonic'
+              ? "bg-yellow-300/80 border-4 border-yellow-500"
               : "bg-blue-300/80 border-4 border-blue-500"
           }`}
         >
           <p
             className={`text-4xl font-black mb-2 ${
-              motionDetected ? "text-red-900" : "text-blue-900"
+              detectionType === 'combined' ? "text-red-900" :
+              detectionType === 'pir' ? "text-orange-900" :
+              detectionType === 'ultrasonic' ? "text-yellow-900" :
+              "text-blue-900"
             }`}
           >
-            {motionDetected ? "DETECTED" : "SCANNING"}
+            {detectionType === 'combined' ? "⚠️ ALERT!" :
+             detectionType === 'pir' ? "MOTION" :
+             detectionType === 'ultrasonic' ? "OBJECT" :
+             "SCANNING"}
           </p>
 
           {/* Progress bar */}
@@ -270,11 +347,18 @@ export default function MotionSensorCard() {
 
           <p
             className={`text-lg font-semibold ${
-              motionDetected ? "text-red-800" : "text-blue-800"
+              detectionType === 'combined' ? "text-red-800" :
+              detectionType === 'pir' ? "text-orange-800" :
+              detectionType === 'ultrasonic' ? "text-yellow-800" :
+              "text-blue-800"
             }`}
           >
-            {motionDetected ? 
-              `Motion Alert! (${motionIntensity}%)` : 
+            {detectionType === 'combined' ? 
+              `🚨 DUAL SENSOR ALERT! (${motionIntensity}%)` :
+             detectionType === 'pir' ?
+              `PIR Motion Detected (${motionIntensity}%)` :
+             detectionType === 'ultrasonic' ?
+              `Object Nearby (${motionIntensity}%)` :
               "AI Monitoring Active"
             }
           </p>

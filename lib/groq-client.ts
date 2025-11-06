@@ -114,37 +114,18 @@ export async function analyzeePlantHealth(enhancedData: any) {
     const trends = enhancedData.trends || { improving: false, declining: false, stable: true }
     const analysisHistory = enhancedData.analysisHistory || []
     
-    // Build historical context
-    const historicalContext = previousReadings.length > 0 ? 
-      `\nHISTORICAL DATA (last ${previousReadings.length} readings):
-${previousReadings.map((reading: any, i: number) => 
-  `Reading ${i + 1}: Temp: ${reading.temperature}°C, Humidity: ${reading.humidity}%, Soil: ${reading.soilHumidity}%, Light: ${reading.light}%, Water: ${reading.waterLevel}%`
-).join('\n')}` : '\nNo historical data available.'
+    // Build compact historical context (limit to save tokens)
+    const historicalContext = previousReadings.length > 2 ? 
+      `\nRecent Avg: T:${(previousReadings.slice(-3).reduce((a: number, r: any) => a + r.temperature, 0) / 3).toFixed(1)}°C, H:${(previousReadings.slice(-3).reduce((a: number, r: any) => a + r.humidity, 0) / 3).toFixed(1)}%, S:${(previousReadings.slice(-3).reduce((a: number, r: any) => a + r.soilHumidity, 0) / 3).toFixed(1)}%` : ''
 
-    const trendContext = `\nTREND ANALYSIS:
-- Improving: ${trends.improving}
-- Declining: ${trends.declining} 
-- Stable: ${trends.stable}`
+    const trendContext = trends.improving ? '\nTrend: ↗️ Improving' : trends.declining ? '\nTrend: ↘️ Declining' : '\nTrend: → Stable'
 
     const previousAnalysisContext = analysisHistory.length > 0 ? 
-      `\nPREVIOUS AI ANALYSIS:
-${analysisHistory.slice(-3).map((analysis: any, i: number) => 
-  `Analysis ${i + 1}: Score: ${analysis.healthScore}%, Status: ${analysis.status}, Main Issues: ${analysis.immediateActions?.slice(0,2).join(', ') || 'None'}`
-).join('\n')}` : '\nNo previous analysis available.'
+      `\nLast: ${analysisHistory[analysisHistory.length - 1]?.healthScore}% (${analysisHistory[analysisHistory.length - 1]?.status})` : ''
 
-    const prompt = `As an expert agricultural AI with advanced analytics capabilities, provide a comprehensive plant health analysis using real-time and historical data:
+    const prompt = `Plant Health Analysis AI. Current: T:${sensorData.temperature}°C H:${sensorData.humidity}% S:${sensorData.soilHumidity}% L:${sensorData.light}% W:${sensorData.waterLevel}%${historicalContext}${trendContext}${previousAnalysisContext}
 
-CURRENT SENSOR DATA:
-- Temperature: ${sensorData.temperature}°C
-- Humidity: ${sensorData.humidity}%  
-- Soil Moisture: ${sensorData.soilHumidity}%
-- Light Level: ${sensorData.light}%
-- Water Level: ${sensorData.waterLevel}%
-${historicalContext}
-${trendContext}
-${previousAnalysisContext}
-
-Using this comprehensive data, provide enhanced analysis in this exact JSON format:
+JSON format:
 {
   "healthScore": <number 0-100>,
   "status": "<excellent|good|fair|poor|critical>",
@@ -171,7 +152,7 @@ Using this comprehensive data, provide enhanced analysis in this exact JSON form
       messages: [{ role: "user", content: prompt }],
       model: "llama-3.1-8b-instant",
       temperature: 0.1,
-      max_tokens: 800 // Increased for enhanced response
+      max_tokens: 400 // Reduced from 800 to save tokens
     })
 
     const response = completion.choices[0]?.message?.content || '{}'

@@ -38,9 +38,29 @@ export function AIPlantHealthAnalysis({ onAnalysisUpdate }: AIPlantHealthAnalysi
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
   const [previousReadings, setPreviousReadings] = useState<any[]>([])
   const [analysisHistory, setAnalysisHistory] = useState<PlantHealthAnalysis[]>([])
+  const [lastApiCall, setLastApiCall] = useState<number>(0)
+  const [rateLimitHit, setRateLimitHit] = useState(false)
 
   const analyzeHealth = async () => {
+    // Rate limiting: Prevent API calls if we hit rate limit recently
+    const now = Date.now()
+    const timeSinceLastCall = now - lastApiCall
+    const minInterval = rateLimitHit ? 180000 : 30000 // 3 minutes if rate limited, 30 seconds normally
+    
+    if (timeSinceLastCall < minInterval) {
+      console.log(`⏱️ Rate limiting: ${Math.round((minInterval - timeSinceLastCall) / 1000)}s remaining`)
+      // Use fallback analysis instead
+      const fallbackAnalysis = generateFallbackAnalysis(state)
+      setAnalysis(fallbackAnalysis)
+      if (onAnalysisUpdate) {
+        onAnalysisUpdate(fallbackAnalysis)
+      }
+      return
+    }
+
     setLoading(true)
+    setLastApiCall(now)
+    
     try {
       // Create current reading
       const currentReading = {
@@ -84,6 +104,19 @@ export function AIPlantHealthAnalysis({ onAnalysisUpdate }: AIPlantHealthAnalysi
       
     } catch (error) {
       console.error('AI health analysis error:', error)
+      
+      // Check if it's a rate limit error
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      if (errorMessage.includes('rate_limit_exceeded') || errorMessage.includes('429')) {
+        setRateLimitHit(true)
+        console.warn('🚫 Rate limit exceeded - using fallback analysis for 3 minutes')
+        // Reset rate limit flag after 3 minutes
+        setTimeout(() => {
+          setRateLimitHit(false)
+          console.log('✅ Rate limit cooldown completed')
+        }, 180000)
+      }
+      
       // Provide fallback analysis
       const fallbackAnalysis = generateFallbackAnalysis(state)
       setAnalysis(fallbackAnalysis)
@@ -188,8 +221,8 @@ export function AIPlantHealthAnalysis({ onAnalysisUpdate }: AIPlantHealthAnalysi
 
   useEffect(() => {
     analyzeHealth()
-    // More frequent updates for dynamic response - every 20 seconds
-    const interval = setInterval(analyzeHealth, 20000)
+    // Rate-limit friendly updates - every 60 seconds (reduced from 20s)
+    const interval = setInterval(analyzeHealth, 60000)
     return () => clearInterval(interval)
   }, [state.temperature, state.humidity, state.soilHumidity, state.light, state.waterLevel])
 
@@ -240,7 +273,9 @@ export function AIPlantHealthAnalysis({ onAnalysisUpdate }: AIPlantHealthAnalysi
           </div>
           <div>
             <h3 className="text-2xl font-bold text-purple-900">AI Plant Health Analysis</h3>
-            <p className="text-purple-600">Powered by Advanced AI</p>
+            <p className="text-purple-600">
+              {rateLimitHit ? '⚠️ Rate Limited - Using Fallback Analysis' : 'Powered by Advanced AI'}
+            </p>
           </div>
         </div>
         <button

@@ -289,7 +289,7 @@ export default function LightPage() {
         </div>
 
         {/* Toggle Light Button */}
-        <div className="fixed bottom-8 right-10 z-10">
+        <div className="fixed bottom-8 right-10 z-10 flex flex-col items-center">
           <button 
             onClick={toggleLight}
             className={`relative hover:scale-105 transition-all duration-300 ${
@@ -312,16 +312,12 @@ export default function LightPage() {
                 lightOn ? 'animate-pulse bg-green-300' : 'bg-red-500'
               }`}></div>
             </div>
-            
-            {/* Button label */}
-            <div className="absolute inset-0 flex items-center justify-center">
-              <span className={`font-bold text-lg drop-shadow-md ${
-                lightOn ? 'text-yellow-900' : 'text-gray-700'
-              }`}>
-                {lightOn ? 'LIGHT ON' : 'LIGHT OFF'}
-              </span>
-            </div>
           </button>
+          
+          {/* Button label - now below the button */}
+          <span className="text-white font-bold text-lg drop-shadow-md mt-0.5">
+            {lightOn ? 'LIGHT ON' : 'LIGHT OFF'}
+          </span>
         </div>
       </div>
     </DashboardLayout>
