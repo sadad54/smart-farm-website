@@ -7,6 +7,7 @@ import { DashboardLayout } from "@/components/dashboard-layout"
 import { Card } from "@/components/ui/card"
 import { SmartFarmAssistant } from "@/components/SmartFarmAssistant"
 import { SmartAlerts } from "@/components/SmartAlerts"
+import { AIPlantHealthAnalysis } from "@/components/AIPlantHealthAnalysis"
 import { Poppins } from "next/font/google";
 
 const poppins = Poppins({
@@ -22,6 +23,10 @@ export default function DashboardPage() {
   const [lightOn, setLightOn] = useState(false)
   const [fanOn, setFanOn] = useState(false) 
   const [waterOn, setWaterOn] = useState(false)
+
+  // AI Plant Health state
+  const [aiHealthScore, setAiHealthScore] = useState<number>(75) // Default fallback score
+  const [aiHealthStatus, setAiHealthStatus] = useState<string>('good')
 
   // Status indicator component
   const StatusIndicator = ({ isOn, label }: { isOn: boolean; label: string }) => (
@@ -91,7 +96,24 @@ export default function DashboardPage() {
     return `${roundToHalf(value)}${unit}`
   }
 
-  // Calculate plant health percentage based on multiple factors
+  // Callback to receive AI health analysis updates
+  const handleAiHealthUpdate = (analysis: any) => {
+    if (analysis) {
+      setAiHealthScore(analysis.healthScore || 75)
+      setAiHealthStatus(analysis.status || 'good')
+      
+      // Also log the AI health score to the database
+      if (analysis.healthScore !== undefined) {
+        const now = Date.now()
+        if (now - lastHealthLogRef.current >= 60000) { // Throttle to once per minute
+          lastHealthLogRef.current = now
+          logPlantHealthToDatabase(analysis.healthScore)
+        }
+      }
+    }
+  }
+
+  // Calculate plant health percentage based on multiple factors (LEGACY - replaced by AI)
   const calculatePlantHealth = (): number => {
     const soil = state.soilHumidity || 0
     const temp = state.temperature || 0
@@ -184,15 +206,7 @@ export default function DashboardPage() {
     return Math.max(0, Math.min(100, Math.round(waterLevel)))
   }
 
-  useEffect(() => {
-    // Log plant health data when sensor data changes (throttled internally)
-    if (connected && state.soilHumidity !== undefined && state.temperature !== undefined && state.humidity !== undefined) {
-      const healthPercentage = calculatePlantHealth()
-      if (healthPercentage > 0) { // Only log if we have valid data
-        logPlantHealthToDatabase(healthPercentage)
-      }
-    }
-  }, [state.soilHumidity, state.temperature, state.humidity, connected])
+  // Health logging now handled by AI analysis callback in handleAiHealthUpdate
   return (
     <DashboardLayout>
       
@@ -205,8 +219,11 @@ export default function DashboardPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
       {/* Plant Health Card */}
 <Card className="bg-[#A8F0C6]/90 backdrop-blur-sm rounded-3xl p-5 border-4 border-green-400 shadow-lg scale-95">
-  <h3 className={`${poppins.className} text-xl font-bold text-green-900 mb-3`}>
-    Plant Health
+  <h3 className={`${poppins.className} text-xl font-bold text-green-900 mb-3 flex items-center gap-2`}>
+     AI Plant Health
+    <span className="text-xs bg-green-200 text-green-700 px-2 py-1 rounded-full font-medium">
+      {aiHealthStatus.toUpperCase()}
+    </span>
   </h3>
 
   <div className="bg-white/90 rounded-2xl p-6 shadow-inner">
@@ -239,13 +256,13 @@ export default function DashboardPage() {
 
           <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 w-20 h-3 bg-gray-200 rounded-full overflow-hidden border border-gray-300 shadow-sm">
             <div
-              className={`h-full rounded-full transition-all duration-500 ${getHealthBarColor(calculatePlantHealth())}`}
-              style={{ width: `${calculatePlantHealth()}%` }}
+              className={`h-full rounded-full transition-all duration-500 ${getHealthBarColor(aiHealthScore)}`}
+              style={{ width: `${aiHealthScore}%` }}
             />
           </div>
 
-          <p className={`absolute bottom-1 left-1/2 transform -translate-x-1/2 text-base font-extrabold drop-shadow-sm px-1 py-0.5 rounded-sm ${getHealthStatusColor(calculatePlantHealth())}`}>
-            {calculatePlantHealth()}%
+          <p className={`absolute bottom-1 left-1/2 transform -translate-x-1/2 text-base font-extrabold drop-shadow-sm px-1 py-0.5 rounded-sm ${getHealthStatusColor(aiHealthScore)}`}>
+            {aiHealthScore}%
           </p>
         </div>
       </div>
@@ -375,12 +392,12 @@ export default function DashboardPage() {
         <div className="flex gap-6 justify-center mb-6">
           <div className="flex items-center gap-3 px-6 py-3 rounded-full bg-white/20 backdrop-blur-sm">
             <div className={`w-4 h-4 rounded-full transition-all duration-300 ${
-              lightOn ? 'bg-green-400 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse' : 'bg-red-400'
+              waterOn ? 'bg-green-400 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse' : 'bg-red-400'
             }`}></div>
             <span className={`text-base font-medium ${
-              lightOn ? 'text-green-100' : 'text-red-100'
+              waterOn ? 'text-green-100' : 'text-red-100'
             }`}>
-              Light {lightOn ? 'ON' : 'OFF'}
+              Water {waterOn ? 'ON' : 'OFF'}
             </span>
           </div>
           <div className="flex items-center gap-3 px-6 py-3 rounded-full bg-white/20 backdrop-blur-sm">
@@ -393,14 +410,15 @@ export default function DashboardPage() {
               Fan {fanOn ? 'ON' : 'OFF'}
             </span>
           </div>
+          
           <div className="flex items-center gap-3 px-6 py-3 rounded-full bg-white/20 backdrop-blur-sm">
             <div className={`w-4 h-4 rounded-full transition-all duration-300 ${
-              waterOn ? 'bg-green-400 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse' : 'bg-red-400'
+              lightOn ? 'bg-green-400 shadow-[0_0_8px_rgba(34,197,94,0.8)] animate-pulse' : 'bg-red-400'
             }`}></div>
             <span className={`text-base font-medium ${
-              waterOn ? 'text-green-100' : 'text-red-100'
+              lightOn ? 'text-green-100' : 'text-red-100'
             }`}>
-              Water {waterOn ? 'ON' : 'OFF'}
+              Light {lightOn ? 'ON' : 'OFF'}
             </span>
           </div>
         </div>
@@ -465,7 +483,10 @@ export default function DashboardPage() {
           </div>
       </div>
       
-      
+      {/* Hidden AI Plant Health Analysis - provides data to dashboard */}
+      <div className="hidden">
+        <AIPlantHealthAnalysis onAnalysisUpdate={handleAiHealthUpdate} />
+      </div>
       
       {/* Smart Farm Assistant Chatbot */}
       <SmartFarmAssistant />

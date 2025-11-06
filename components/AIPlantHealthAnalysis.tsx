@@ -12,44 +12,202 @@ interface PlantHealthAnalysis {
   recommendations: string[]
   risks: string[]
   summary: string
+  metrics: {
+    temperatureScore: number
+    humidityScore: number
+    soilScore: number
+    lightScore: number
+    waterScore: number
+  }
+  trends: {
+    improving: boolean
+    declining: boolean
+    stable: boolean
+  }
+  confidence: number
 }
 
-export function AIPlantHealthAnalysis() {
+interface AIPlantHealthAnalysisProps {
+  onAnalysisUpdate?: (analysis: PlantHealthAnalysis | null) => void
+}
+
+export function AIPlantHealthAnalysis({ onAnalysisUpdate }: AIPlantHealthAnalysisProps = {}) {
   const { state } = useEspContext()
   const [analysis, setAnalysis] = useState<PlantHealthAnalysis | null>(null)
   const [loading, setLoading] = useState(false)
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
+  const [previousReadings, setPreviousReadings] = useState<any[]>([])
+  const [analysisHistory, setAnalysisHistory] = useState<PlantHealthAnalysis[]>([])
 
   const analyzeHealth = async () => {
     setLoading(true)
     try {
+      // Create current reading
+      const currentReading = {
+        temperature: state.temperature || 0,
+        humidity: state.humidity || 0,
+        soilHumidity: state.soilHumidity || 0,
+        light: state.light || 0,
+        waterLevel: state.waterLevel || 0,
+        timestamp: Date.now()
+      }
+
+      // Calculate trends from historical data
+      const recentReadings = [...previousReadings.slice(-5), currentReading]
+      const trends = calculateTrends(recentReadings)
+
       const response = await fetch('/api/ai-plant-health', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          temperature: state.temperature,
-          humidity: state.humidity,
-          soilHumidity: state.soilHumidity,
-          light: state.light,
-          waterLevel: state.waterLevel
+          ...currentReading,
+          historicalData: previousReadings.slice(-10), // Last 10 readings for context
+          trends: trends,
+          previousAnalysis: analysisHistory.slice(-3) // Last 3 analyses for continuity
         })
       })
 
       const data = await response.json()
-      setAnalysis(data.analysis)
-      setLastUpdate(new Date())
+      
+      if (data.success && data.analysis) {
+        setAnalysis(data.analysis)
+        setAnalysisHistory(prev => [...prev.slice(-9), data.analysis]) // Keep last 10 analyses
+        setLastUpdate(new Date())
+        // Notify parent component of analysis update
+        if (onAnalysisUpdate) {
+          onAnalysisUpdate(data.analysis)
+        }
+      }
+
+      // Update readings history
+      setPreviousReadings(prev => [...prev.slice(-19), currentReading]) // Keep last 20 readings
+      
     } catch (error) {
       console.error('AI health analysis error:', error)
+      // Provide fallback analysis
+      const fallbackAnalysis = generateFallbackAnalysis(state)
+      setAnalysis(fallbackAnalysis)
+      // Notify parent component of fallback analysis
+      if (onAnalysisUpdate) {
+        onAnalysisUpdate(fallbackAnalysis)
+      }
     } finally {
       setLoading(false)
     }
   }
 
+  // Helper function to calculate trends
+  const calculateTrends = (readings: any[]) => {
+    if (readings.length < 3) return { improving: false, declining: false, stable: true }
+
+    const recent = readings.slice(-3)
+    const avgRecent = recent.reduce((acc, r) => acc + (r.temperature + r.humidity + r.soilHumidity + r.light + r.waterLevel) / 5, 0) / recent.length
+    
+    const older = readings.slice(-6, -3)
+    if (older.length === 0) return { improving: false, declining: false, stable: true }
+    
+    const avgOlder = older.reduce((acc, r) => acc + (r.temperature + r.humidity + r.soilHumidity + r.light + r.waterLevel) / 5, 0) / older.length
+
+    const trend = avgRecent - avgOlder
+    return {
+      improving: trend > 2,
+      declining: trend < -2,
+      stable: Math.abs(trend) <= 2
+    }
+  }
+
+  // Enhanced fallback analysis with better scoring
+  const generateFallbackAnalysis = (sensorData: any): PlantHealthAnalysis => {
+    const temp = sensorData.temperature || 0
+    const humidity = sensorData.humidity || 0
+    const soil = sensorData.soilHumidity || 0
+    const light = sensorData.light || 0
+    const water = sensorData.waterLevel || 0
+
+    // Advanced scoring system
+    const tempScore = Math.max(0, 100 - Math.abs(temp - 25) * 2.5)
+    const humidityScore = Math.max(0, 100 - Math.abs(humidity - 65) * 1.5)
+    const soilScore = Math.max(0, 100 - Math.abs(soil - 50) * 2)
+    const lightScore = Math.max(0, 100 - Math.abs(light - 55) * 1.2)
+    const waterScore = water > 20 ? 100 : Math.max(0, water * 5)
+
+    const overallScore = Math.round(
+      (tempScore * 0.25) + (humidityScore * 0.15) + (soilScore * 0.35) + (lightScore * 0.15) + (waterScore * 0.10)
+    )
+
+    let status: string
+    if (overallScore >= 90) status = 'excellent'
+    else if (overallScore >= 75) status = 'good'
+    else if (overallScore >= 60) status = 'fair'
+    else if (overallScore >= 40) status = 'poor'
+    else status = 'critical'
+
+    const immediateActions = []
+    const recommendations = []
+    const risks = []
+
+    if (temp < 18 || temp > 32) {
+      immediateActions.push(`Adjust temperature (currently ${temp}°C)`)
+      risks.push('Temperature stress affecting plant growth')
+    }
+    if (soil < 30) {
+      immediateActions.push('Water plants - soil moisture critically low')
+      risks.push('Plant dehydration risk')
+    }
+    if (water < 20) {
+      immediateActions.push('Refill water tank immediately')
+      risks.push('Water supply shortage')
+    }
+
+    if (humidity < 50) recommendations.push('Increase humidity levels')
+    if (light < 40) recommendations.push('Provide additional lighting')
+    if (soil > 75) recommendations.push('Reduce watering frequency')
+
+    return {
+      healthScore: overallScore,
+      status,
+      immediateActions,
+      recommendations: recommendations.length ? recommendations : ['Monitor current conditions'],
+      risks: risks.length ? risks : ['No immediate risks detected'],
+      summary: `Plant health is ${status}. Score: ${overallScore}%. ${immediateActions.length ? 'Immediate attention required.' : 'Conditions are stable.'}`,
+      metrics: {
+        temperatureScore: Math.round(tempScore),
+        humidityScore: Math.round(humidityScore),
+        soilScore: Math.round(soilScore),
+        lightScore: Math.round(lightScore),
+        waterScore: Math.round(waterScore)
+      },
+      trends: {
+        improving: false,
+        declining: overallScore < 60,
+        stable: overallScore >= 60
+      },
+      confidence: 85
+    }
+  }
+
   useEffect(() => {
     analyzeHealth()
-    const interval = setInterval(analyzeHealth, 60000) // Update every minute
+    // More frequent updates for dynamic response - every 20 seconds
+    const interval = setInterval(analyzeHealth, 20000)
     return () => clearInterval(interval)
-  }, [state.temperature, state.humidity, state.soilHumidity])
+  }, [state.temperature, state.humidity, state.soilHumidity, state.light, state.waterLevel])
+
+  // Trigger immediate analysis when significant sensor changes occur
+  useEffect(() => {
+    if (previousReadings.length > 0) {
+      const lastReading = previousReadings[previousReadings.length - 1]
+      const significantChange = 
+        Math.abs((state.temperature || 0) - lastReading.temperature) > 2 ||
+        Math.abs((state.soilHumidity || 0) - lastReading.soilHumidity) > 5 ||
+        Math.abs((state.waterLevel || 0) - lastReading.waterLevel) > 10
+
+      if (significantChange && !loading) {
+        console.log('Significant sensor change detected, triggering immediate analysis')
+        analyzeHealth()
+      }
+    }
+  }, [state.temperature, state.soilHumidity, state.waterLevel, loading])
 
   const getStatusIcon = (status: string) => {
     switch (status) {

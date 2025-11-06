@@ -106,46 +106,108 @@ Always provide specific advice based on current sensor readings when available. 
 }
 
 // Plant Health AI Analysis
-export async function analyzeePlantHealth(sensorData: any) {
+export async function analyzeePlantHealth(enhancedData: any) {
   try {
-    const prompt = `As an expert agricultural AI, provide a comprehensive plant health analysis based on these sensor readings:
+    // Extract data from enhanced payload
+    const sensorData = enhancedData.currentSensorData || enhancedData
+    const previousReadings = enhancedData.previousReadings || []
+    const trends = enhancedData.trends || { improving: false, declining: false, stable: true }
+    const analysisHistory = enhancedData.analysisHistory || []
+    
+    // Build historical context
+    const historicalContext = previousReadings.length > 0 ? 
+      `\nHISTORICAL DATA (last ${previousReadings.length} readings):
+${previousReadings.map((reading: any, i: number) => 
+  `Reading ${i + 1}: Temp: ${reading.temperature}°C, Humidity: ${reading.humidity}%, Soil: ${reading.soilHumidity}%, Light: ${reading.light}%, Water: ${reading.waterLevel}%`
+).join('\n')}` : '\nNo historical data available.'
 
-SENSOR DATA:
+    const trendContext = `\nTREND ANALYSIS:
+- Improving: ${trends.improving}
+- Declining: ${trends.declining} 
+- Stable: ${trends.stable}`
+
+    const previousAnalysisContext = analysisHistory.length > 0 ? 
+      `\nPREVIOUS AI ANALYSIS:
+${analysisHistory.slice(-3).map((analysis: any, i: number) => 
+  `Analysis ${i + 1}: Score: ${analysis.healthScore}%, Status: ${analysis.status}, Main Issues: ${analysis.immediateActions?.slice(0,2).join(', ') || 'None'}`
+).join('\n')}` : '\nNo previous analysis available.'
+
+    const prompt = `As an expert agricultural AI with advanced analytics capabilities, provide a comprehensive plant health analysis using real-time and historical data:
+
+CURRENT SENSOR DATA:
 - Temperature: ${sensorData.temperature}°C
 - Humidity: ${sensorData.humidity}%  
 - Soil Moisture: ${sensorData.soilHumidity}%
 - Light Level: ${sensorData.light}%
 - Water Level: ${sensorData.waterLevel}%
+${historicalContext}
+${trendContext}
+${previousAnalysisContext}
 
-Provide analysis in this exact JSON format:
+Using this comprehensive data, provide enhanced analysis in this exact JSON format:
 {
   "healthScore": <number 0-100>,
   "status": "<excellent|good|fair|poor|critical>",
   "immediateActions": ["action1", "action2"],
   "recommendations": ["rec1", "rec2"], 
   "risks": ["risk1", "risk2"],
-  "summary": "brief overall assessment"
+  "summary": "brief overall assessment incorporating trends and history",
+  "metrics": {
+    "temperatureScore": <number 0-100>,
+    "humidityScore": <number 0-100>,
+    "soilScore": <number 0-100>,
+    "lightScore": <number 0-100>,
+    "waterScore": <number 0-100>
+  },
+  "trends": {
+    "improving": <boolean>,
+    "declining": <boolean>,
+    "stable": <boolean>
+  },
+  "confidence": <number 0-100>
 }`
 
     const completion = await groq.chat.completions.create({
       messages: [{ role: "user", content: prompt }],
       model: "llama-3.1-8b-instant",
       temperature: 0.1,
-      max_tokens: 500
+      max_tokens: 800 // Increased for enhanced response
     })
 
     const response = completion.choices[0]?.message?.content || '{}'
     
     try {
-      return JSON.parse(response)
+      const parsed = JSON.parse(response)
+      // Ensure all required fields are present for enhanced analysis
+      return {
+        healthScore: parsed.healthScore || 75,
+        status: parsed.status || 'good',
+        immediateActions: parsed.immediateActions || [],
+        recommendations: parsed.recommendations || [],
+        risks: parsed.risks || [],
+        summary: parsed.summary || 'Analysis complete',
+        metrics: parsed.metrics || {
+          temperatureScore: 85,
+          humidityScore: 80,
+          soilScore: 75,
+          lightScore: 70,
+          waterScore: 90
+        },
+        trends: parsed.trends || trends,
+        confidence: parsed.confidence || 90
+      }
     } catch {
-      // Fallback calculation if JSON parsing fails
-      return calculateFallbackHealth(sensorData)
+      // Enhanced fallback calculation if JSON parsing fails  
+      return calculateEnhancedFallbackHealth(sensorData, trends, previousReadings)
     }
     
   } catch (error) {
     console.error('Plant health analysis error:', error)
-    return calculateFallbackHealth(sensorData)
+    // Extract sensor data from enhanced payload for fallback
+    const fallbackSensorData = enhancedData.currentSensorData || enhancedData
+    const fallbackTrends = enhancedData.trends || { improving: false, declining: false, stable: true }
+    const fallbackPreviousReadings = enhancedData.previousReadings || []
+    return calculateEnhancedFallbackHealth(fallbackSensorData, fallbackTrends, fallbackPreviousReadings)
   }
 }
 
@@ -270,6 +332,99 @@ function calculateFallbackHealth(sensorData: any) {
     risks: temp > 30 ? ["Heat stress risk"] : [],
     summary: `Plant health is ${status} (${healthScore}%)`
   }
+}
+
+// Enhanced fallback health calculation with historical context
+function calculateEnhancedFallbackHealth(sensorData: any, trends: any, previousReadings: any[]) {
+  const temp = sensorData.temperature || 25
+  const humidity = sensorData.humidity || 60
+  const soil = sensorData.soilHumidity || 50
+  const light = sensorData.light || 50
+  const water = sensorData.waterLevel || 50
+  
+  // Enhanced scoring with more factors
+  const tempScore = Math.max(0, 100 - Math.abs(temp - 25) * 2.5)
+  const humidityScore = Math.max(0, 100 - Math.abs(humidity - 65) * 1.5)
+  const soilScore = Math.max(0, 100 - Math.abs(soil - 50) * 2)
+  const lightScore = Math.max(0, 100 - Math.abs(light - 55) * 1.2)
+  const waterScore = water > 20 ? 100 : Math.max(0, water * 5)
+
+  // Trend-based adjustments
+  let trendAdjustment = 0
+  if (trends.improving) trendAdjustment = 5
+  else if (trends.declining) trendAdjustment = -5
+
+  // Historical context adjustment
+  let stabilityBonus = 0
+  if (previousReadings.length >= 3) {
+    const recentVariation = calculateVariation(previousReadings.slice(-3))
+    stabilityBonus = recentVariation < 10 ? 3 : recentVariation > 20 ? -3 : 0
+  }
+
+  const baseScore = Math.round(
+    (tempScore * 0.25) + (humidityScore * 0.15) + (soilScore * 0.35) + 
+    (lightScore * 0.15) + (waterScore * 0.10)
+  )
+  
+  const healthScore = Math.max(0, Math.min(100, baseScore + trendAdjustment + stabilityBonus))
+  
+  let status = 'critical'
+  if (healthScore >= 90) status = 'excellent'
+  else if (healthScore >= 75) status = 'good'
+  else if (healthScore >= 60) status = 'fair'
+  else if (healthScore >= 40) status = 'poor'
+
+  const immediateActions = []
+  const recommendations = []
+  const risks = []
+
+  if (temp < 18 || temp > 32) {
+    immediateActions.push(`Temperature adjustment needed (${temp}°C)`)
+    risks.push('Temperature stress')
+  }
+  if (soil < 30) {
+    immediateActions.push('Urgent watering required')
+    risks.push('Plant dehydration')
+  }
+  if (water < 20) {
+    immediateActions.push('Refill water tank')
+    risks.push('Water supply shortage')
+  }
+
+  if (humidity < 50) recommendations.push('Increase humidity')
+  if (light < 40) recommendations.push('Provide more light')
+  if (trends.declining) recommendations.push('Monitor system closely')
+
+  return {
+    healthScore,
+    status,
+    immediateActions: immediateActions.length ? immediateActions : ['Monitor conditions'],
+    recommendations: recommendations.length ? recommendations : ['Maintain current settings'],
+    risks: risks.length ? risks : ['No immediate risks'],
+    summary: `Plant health: ${status} (${healthScore}%). ${trends.improving ? 'Improving trend.' : trends.declining ? 'Declining trend.' : 'Stable conditions.'}`,
+    metrics: {
+      temperatureScore: Math.round(tempScore),
+      humidityScore: Math.round(humidityScore),
+      soilScore: Math.round(soilScore),
+      lightScore: Math.round(lightScore),
+      waterScore: Math.round(waterScore)
+    },
+    trends,
+    confidence: 85 + (previousReadings.length > 5 ? 10 : 0) + stabilityBonus
+  }
+}
+
+// Helper function to calculate variation in readings
+function calculateVariation(readings: any[]) {
+  if (readings.length < 2) return 0
+  
+  const temps = readings.map(r => r.temperature || 25)
+  const soils = readings.map(r => r.soilHumidity || 50)
+  
+  const tempVar = Math.max(...temps) - Math.min(...temps)
+  const soilVar = Math.max(...soils) - Math.min(...soils)
+  
+  return (tempVar + soilVar) / 2
 }
 
 // Fallback watering calculation  

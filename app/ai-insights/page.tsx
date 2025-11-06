@@ -30,6 +30,7 @@ export default function AIInsightsPage() {
   const [chartData, setChartData] = useState<ChartDataPoint[]>([])
   const [currentChartIndex, setCurrentChartIndex] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [aiAnalyzing, setAiAnalyzing] = useState(false)
   const [aiInsights, setAiInsights] = useState({
     status: 'good' as 'excellent' | 'good' | 'fair' | 'poor' | 'critical',
     score: 75,
@@ -132,10 +133,11 @@ export default function AIInsightsPage() {
       const result = await response.json()
       
       if (result.data) {
-        // Create current data point from live MQTT data
+        // Create current data point from live MQTT data with seconds precision
         const currentTime = new Date().toLocaleTimeString('en-US', { 
           hour: '2-digit', 
-          minute: '2-digit' 
+          minute: '2-digit',
+          second: '2-digit'
         })
         
         const newDataPoint: ChartDataPoint = {
@@ -147,11 +149,27 @@ export default function AIInsightsPage() {
           water_level: result.data.waterLevel
         }
         
-        // Update chart data - keep last 60 points for smooth scrolling graph
+        // Update chart data - avoid too frequent updates and keep last 50 points
         setChartData(prevData => {
+          // Check if enough time has passed since last reading (minimum 8 seconds)
+          const lastReading = prevData[prevData.length - 1]
+          const now = new Date()
+          
+          if (lastReading) {
+            const lastTime = lastReading.time
+            const [lastHour, lastMinute, lastSecond] = lastTime.split(':').map(Number)
+            const lastTimestamp = lastHour * 3600 + lastMinute * 60 + lastSecond
+            const currentTimestamp = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()
+            
+            // Only add if at least 8 seconds have passed
+            if (Math.abs(currentTimestamp - lastTimestamp) < 8) {
+              return prevData
+            }
+          }
+          
           const newData = [...prevData, newDataPoint]
-          // Keep only the last 60 data points to prevent memory issues
-          return newData.slice(-60)
+          // Keep only the last 50 data points for better performance
+          return newData.slice(-50)
         })
         
         console.log('📊 AI Insights updated with live MQTT data:', newDataPoint)
@@ -165,19 +183,62 @@ export default function AIInsightsPage() {
     }
   }
 
-  const updateAiInsights = () => {
+  const updateAiInsights = async () => {
     const temp = state.temperature || 0
     const humidity = state.humidity || 0
     const soil = state.soilHumidity || 0
+    const light = state.light || 0
+    const water = state.waterLevel || 0
     
-    // Calculate plant health score
-    const tempScore = temp >= 20 && temp <= 30 ? 100 : Math.max(0, 100 - Math.abs(temp - 25) * 4)
-    const humidityScore = humidity >= 50 && humidity <= 80 ? 100 : Math.max(0, 100 - Math.abs(humidity - 65) * 2)
-    const soilScore = soil >= 40 && soil <= 80 ? 100 : Math.max(0, 100 - Math.abs(soil - 60) * 2)
+    setAiAnalyzing(true)
     
-    const overallScore = Math.round((tempScore * 0.3) + (humidityScore * 0.2) + (soilScore * 0.5))
+    try {
+      // Get AI-powered plant health analysis
+      const response = await fetch('/api/ai-plant-health', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          temperature: temp,
+          humidity: humidity,
+          soilHumidity: soil,
+          light: light,
+          waterLevel: water
+        })
+      })
+
+      const data = await response.json()
+      
+      if (data.success && data.analysis) {
+        // Use AI analysis for more dynamic insights
+        setAiInsights({
+          status: data.analysis.status,
+          score: data.analysis.healthScore,
+          recommendations: data.analysis.recommendations || [],
+          trends: data.analysis.immediateActions || []
+        })
+        return
+      }
+    } catch (error) {
+      console.log('Using fallback health calculation:', error)
+    }
+
+    // Enhanced fallback calculation with all factors
+    const tempScore = temp >= 20 && temp <= 30 ? 100 : Math.max(0, 100 - Math.abs(temp - 25) * 3)
+    const humidityScore = humidity >= 50 && humidity <= 80 ? 100 : Math.max(0, 100 - Math.abs(humidity - 65) * 1.5)
+    const soilScore = soil >= 30 && soil <= 70 ? 100 : Math.max(0, 100 - Math.abs(soil - 50) * 2)
+    const lightScore = light >= 30 && light <= 80 ? 100 : Math.max(0, 100 - Math.abs(light - 55) * 1.2)
+    const waterScore = water >= 20 ? 100 : Math.max(0, water * 5) // Water level critical below 20%
     
-    // Determine status
+    // Weighted calculation including all factors
+    const overallScore = Math.round(
+      (tempScore * 0.25) + 
+      (humidityScore * 0.15) + 
+      (soilScore * 0.35) + 
+      (lightScore * 0.15) + 
+      (waterScore * 0.10)
+    )
+    
+    // Determine status with enhanced thresholds
     let status: typeof aiInsights.status = 'critical'
     if (overallScore >= 90) status = 'excellent'
     else if (overallScore >= 75) status = 'good' 
@@ -208,10 +269,10 @@ export default function AIInsightsPage() {
       trends.push("Humidity levels are good ✅")
     }
     
-    if (soil < 40) {
-      recommendations.push("🚰 Soil is dry - increase watering")
+    if (soil < 30) {
+      recommendations.push("🚰 Soil is dry - increase watering frequency")
       trends.push("Soil moisture below optimal range")
-    } else if (soil > 80) {
+    } else if (soil > 70) {
       recommendations.push("💧 Soil is too wet - reduce watering")
       trends.push("Soil moisture above optimal range")  
     } else if (soil > 0) {
@@ -220,12 +281,35 @@ export default function AIInsightsPage() {
       recommendations.push("🔧 Check soil sensor connection")
       trends.push("Soil sensor needs attention")
     }
+
+    // Light level recommendations
+    if (light < 30) {
+      recommendations.push("💡 Light levels low - consider grow lights")
+      trends.push("Plants need more light exposure")
+    } else if (light > 80) {
+      recommendations.push("☀️ Very bright - ensure adequate shade")
+      trends.push("High light intensity detected")
+    } else {
+      trends.push("Light levels are appropriate ✅")
+    }
+
+    // Water tank level recommendations
+    if (water < 20) {
+      recommendations.push("🚨 Water tank critically low - refill immediately")
+      trends.push("Water supply needs urgent attention")
+    } else if (water < 40) {
+      recommendations.push("⚠️ Water tank getting low - plan to refill soon")
+      trends.push("Water supply running low")
+    } else {
+      trends.push("Water tank level is adequate ✅")
+    }
     
     if (recommendations.length === 0) {
       recommendations.push("🎉 All conditions are optimal! Your plants are thriving!")
     }
     
     setAiInsights({ status, score: overallScore, recommendations, trends })
+    setAiAnalyzing(false)
   }
 
   const nextChart = () => {
@@ -274,7 +358,7 @@ export default function AIInsightsPage() {
             </div>
 
             {/* Real-time Dashboard Cards */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
               {/* Temperature Card */}
               <div className="bg-white/90 rounded-xl p-4 border-2 border-red-200">
                 <div className="flex items-center gap-2 mb-2">
@@ -303,6 +387,8 @@ export default function AIInsightsPage() {
                 <p className="text-xs text-blue-600 mt-1">Air moisture</p>
               </div>
 
+            
+
               {/* Soil Moisture Card */}
               <div className="bg-white/90 rounded-xl p-4 border-2 border-green-200">
                 <div className="flex items-center gap-2 mb-2">
@@ -314,7 +400,7 @@ export default function AIInsightsPage() {
                     ? `${state.soilHumidity.toFixed(1)}%` 
                     : 'N/A'}
                 </p>
-                <p className="text-xs text-green-600 mt-1">Soil health</p>
+                <p className="text-xs text-green-600 mt-1">Soil wetness</p>
               </div>
 
               {/* Light Level Card */}
@@ -329,6 +415,20 @@ export default function AIInsightsPage() {
                     : 'N/A'}
                 </p>
                 <p className="text-xs text-yellow-600 mt-1">Brightness</p>
+              </div>
+
+              {/* Water Level Card */}
+              <div className="bg-white/90 rounded-xl p-4 border-2 border-cyan-200">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-3 h-3 rounded-full bg-cyan-500" />
+                  <span className="text-sm font-semibold text-cyan-800">Water Tank</span>
+                </div>
+                <p className="text-2xl font-bold text-cyan-900">
+                  {state.waterLevel !== undefined && state.waterLevel !== null && state.waterLevel !== -999 
+                    ? `${state.waterLevel.toFixed(1)}%` 
+                    : 'N/A'}
+                </p>
+                <p className="text-xs text-cyan-600 mt-1">Tank level</p>
               </div>
             </div>
 
@@ -362,8 +462,11 @@ export default function AIInsightsPage() {
                           <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                           <XAxis 
                             dataKey="time" 
-                            tick={{ fontSize: 12, fill: '#6b7280' }}
+                            tick={{ fontSize: 11, fill: '#6b7280' }}
                             interval={'preserveStartEnd'}
+                            angle={-90}
+                            textAnchor="end"
+                            height={60}
                           />
                           <YAxis 
                             tick={{ fontSize: 12, fill: '#6b7280' }}
