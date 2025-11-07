@@ -71,7 +71,7 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
 
   // MQTT-ONLY command sending function
   async function sendCommand(value: string, location?: string, metadata?: any) {
-    console.log(`🎛️ Sending MQTT-ONLY command: ${value}`)
+    console.log(`🎛️ MQTT Command Request - Input: "${value}" (type: ${typeof value})`)
     
     // Map command to action type for logging
     const getActionType = (cmd: string) => {
@@ -86,42 +86,60 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
       }
     }
 
+    const actionType = getActionType(value)
+    console.log(`📋 Command mapping: "${value}" -> "${actionType}"`)
+
     try {
       // Use AbortController for faster timeout
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 5000) // 5 second timeout for MQTT
+      const timeoutId = setTimeout(() => controller.abort(), 10000) // Increased to 10 seconds for debugging
+      
+      console.log('📤 Sending HTTP request to /api/mqtt-command...')
+      
+      const requestBody = {
+        action: value.toUpperCase(),
+        duration_ms: 3000,
+        device_id: 'farm_001'
+      }
+      console.log('📦 Request body:', JSON.stringify(requestBody, null, 2))
       
       // Send command directly via MQTT (no HTTP fallback)
       const response = await fetch('/api/mqtt-command', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: value.toUpperCase(),
-          duration_ms: 3000,
-          device_id: 'farm_001'
-        }),
+        body: JSON.stringify(requestBody),
         signal: controller.signal
       })
 
       clearTimeout(timeoutId)
+      
+      console.log(`📨 HTTP Response: ${response.status} ${response.statusText}`)
 
       if (!response.ok) {
         const errorData = await response.json()
+        console.log('❌ Error response data:', errorData)
         throw new Error(`MQTT command failed: ${errorData.error || 'Unknown error'}`)
       }
 
       const result = await response.json()
-      console.log(`✅ MQTT command sent successfully: ${result.command_id}`)
+      console.log(`✅ MQTT API Response:`, result)
+      console.log(`🆔 Command ID: ${result.command_id}`)
+      console.log(`📡 Protocol: ${result.protocol}`)
+      console.log(`🔗 MQTT Connected: ${result.mqtt_connected}`)
       
       // Immediately update state for visual feedback (optimistic update)
-      const actionType = getActionType(value)
-      console.log(`🔄 MQTT command confirmed for ${actionType}`)
+      console.log(`🔄 Command "${actionType}" sent via ${result.protocol} - awaiting ESP32 response`)
       
-      return { ok: true, command_id: result.command_id, protocol: 'mqtt' }
+      return { ok: true, command_id: result.command_id, protocol: result.protocol, result: result }
       
     } catch (error: any) {
-      console.error('❌ MQTT command failed:', error.message)
-      return { ok: false, error: error.message, protocol: 'mqtt' }
+      if (error.name === 'AbortError') {
+        console.error('⏰ MQTT command timeout - request took longer than 10 seconds')
+        return { ok: false, error: 'Command timeout', protocol: 'mqtt' }
+      } else {
+        console.error('❌ MQTT command failed:', error.message)
+        return { ok: false, error: error.message, protocol: 'mqtt' }
+      }
     }
   }
 

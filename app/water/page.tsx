@@ -34,12 +34,11 @@ interface WateringRecord {
 }
 
 interface WaterTankData {
-  current_level_percent: number
-  current_liters: number
   capacity_liters: number
-  status: string
   last_refill: string
-  estimated_days_remaining: number
+  mqtt_connected: boolean
+  data_source: string
+  note?: string
 }
 
 interface WateringSchedule {
@@ -472,7 +471,7 @@ export default function WaterPage() {
               </div>
               <div className="bg-gradient-to-b from-blue-100 to-blue-300 rounded-2xl p-8 relative overflow-hidden h-64">
                 <div 
-                  className={`absolute bottom-0 left-0 right-0 rounded-t-[50px] transition-all duration-1000 ${
+                  className={`absolute bottom-0 left-0 right-0 rounded-t-[50px] transition-all duration-500 ${
                     (state.waterLevel ?? 61) < 20 ? 'bg-red-500' : 
                     (state.waterLevel ?? 61) < 50 ? 'bg-yellow-500' : 'bg-blue-500'
                   }`}
@@ -490,7 +489,7 @@ export default function WaterPage() {
                 {/* Tank Info */}
                 <div className="absolute top-4 left-4 text-blue-900">
                   <p className="text-sm font-semibold">Capacity: {waterTankData?.capacity_liters || 100}L</p>
-                  <p className="text-xs opacity-75">Est. {Math.max(1, Math.floor(((state.waterLevel ?? 61) / 100 * 100) / 10))} days remaining</p>
+                  <p className="text-xs opacity-75">Est. {Math.max(1, Math.floor((((state.waterLevel ?? 61) / 100) * (waterTankData?.capacity_liters || 100)) / 10))} days remaining</p>
                 </div>
                 
                 {/* Level Display */}
@@ -500,7 +499,7 @@ export default function WaterPage() {
                 
                 {/* Current Liters */}
                 <div className="absolute bottom-8 left-8 text-blue-900">
-                  <p className="text-lg font-bold">{Math.round(((state.waterLevel ?? 61) / 100) * (waterTankData?.capacity_liters || 100))}L</p>
+                  <p className="text-lg font-bold">{(((state.waterLevel ?? 61) / 100) * (waterTankData?.capacity_liters || 100)).toFixed(1)}L</p>
                   <p className="text-xs opacity-75">Current Volume</p>
                 </div>
                 

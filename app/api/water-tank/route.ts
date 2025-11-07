@@ -1,42 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
+import smartFarmMQTT from '@/lib/mqtt-client'
 
-// GET - Fetch current water tank level
+// GET - Fetch water tank metadata (capacity, refill info) - water level comes from MQTT in real-time
 export async function GET(request: NextRequest) {
   try {
-    // Get latest water level sensor reading
-    const { data: waterLevelData, error: levelError } = await supabaseAdmin
-      .from('sensor_readings')
-      .select('*')
-      .eq('metric', 'water_level')
-      .eq('device_id', 'farm_001')
-      .order('timestamp', { ascending: false })
-      .limit(1)
-
-    if (levelError) {
-      console.error('Database error:', levelError)
-      return NextResponse.json({ error: levelError.message }, { status: 500 })
-    }
-
-    // Get water tank capacity and other info
+    // Get water tank capacity and metadata (NOT current level - that comes from MQTT)
     const { data: tankInfo, error: tankError } = await supabaseAdmin
       .from('water_tank_info')
       .select('*')
       .eq('device_id', 'farm_001')
       .single()
 
-    const currentLevel = waterLevelData?.[0]?.value || 68 // Default fallback
+    if (tankError) {
+      console.log('No tank info found, using defaults')
+    }
+
     const capacity = tankInfo?.capacity_liters || 100
-    const currentLiters = Math.round((currentLevel / 100) * capacity)
-    const percentage = Math.round(currentLevel)
+    const isMqttConnected = smartFarmMQTT.isConnected()
+    
+    console.log('🌊 Water tank API - returning metadata only (level from MQTT)')
 
     return NextResponse.json({
-      current_level_percent: percentage,
-      current_liters: currentLiters,
       capacity_liters: capacity,
-      status: percentage > 80 ? 'full' : percentage > 30 ? 'medium' : 'low',
       last_refill: tankInfo?.last_refill || new Date().toISOString(),
-      estimated_days_remaining: Math.max(1, Math.floor(currentLiters / 10)) // Assuming 10L/day usage
+      mqtt_connected: isMqttConnected,
+      data_source: 'mqtt-realtime',
+      note: 'Current water level comes from real-time MQTT data via useEspContext'
     })
   } catch (error) {
     console.error('API error:', error)

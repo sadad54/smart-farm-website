@@ -37,9 +37,9 @@ export default function Scenario1Page() {
       const now = Date.now()
       if (now - detectionCooldownRef.current > 3000) { // 3 second minimum between detections
         
-        // Animal detection logic: Expanded range for better detection
-        // Close range: 2-15cm indicates animal presence (more realistic)
-        if (currentDistance >= 2 && currentDistance <= 15) {
+        // Animal detection logic: Precise close range for feeding
+        // Very close range: 2-7cm indicates animal presence (realistic close approach)
+        if (currentDistance >= 2 && currentDistance <= 7) {
           if (!animalDetected && !feedingCooldown) {
             setAnimalDetected(true)
             detectionCooldownRef.current = now
@@ -51,7 +51,7 @@ export default function Scenario1Page() {
           }
         } else {
           // Animal moved away or out of range
-          if (animalDetected && currentDistance > 20) {
+          if (animalDetected && currentDistance > 10) {
             setAnimalDetected(false)
             console.log(`🚪 Animal left detection zone - Distance: ${currentDistance.toFixed(1)}cm`)
           }
@@ -86,7 +86,7 @@ export default function Scenario1Page() {
           })
           
           if (recentMotion && !feedingCooldown) {
-            setDistance(Math.random() * 3 + 2) // 2-5cm for recent motion
+            setDistance(Math.random() * 5 + 2) // 2-7cm for recent motion
             setAnimalDetected(true)
             if (feedingMode === 'auto') {
               handleFeed()
@@ -108,7 +108,7 @@ export default function Scenario1Page() {
     if (animalDetected) {
       const timeout = setTimeout(() => {
         setAnimalDetected(false)
-        setDistance(15) // Reset to max distance
+        setDistance(12) // Reset to max detection distance
       }, 10000) // Clear detection after 10 seconds
       
       return () => clearTimeout(timeout)
@@ -116,32 +116,53 @@ export default function Scenario1Page() {
   }, [animalDetected])
 
   const handleFeed = async () => {
-    if (feedingCooldown) return // Prevent rapid feeding
+    if (feedingCooldown) {
+      console.log('⚠️ Feeding blocked - cooldown active')
+      return // Prevent rapid feeding
+    }
+    
+    console.log('🍽️ handleFeed() called - Starting feeding process...')
     
     try {
-      await sendCommand('C') // Send feeding command to ESP
-      setLastFeedingTime(new Date())
-      setFeedingCooldown(true)
+      console.log('📤 Sending command "C" to ESP32...')
+      const commandResult = await sendCommand('C') // Send feeding command to ESP
       
-      // Log feeding event to database
-      await fetch('/api/feeding-events', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          feeding_time: new Date().toISOString(),
-          trigger_type: animalDetected ? 'automatic' : 'manual',
-          distance: distance,
-          motion_detected: animalDetected
+      console.log('📨 Command result:', commandResult)
+      
+      if (commandResult && commandResult.ok) {
+        console.log('✅ Feed command sent successfully')
+        setLastFeedingTime(new Date())
+        setFeedingCooldown(true)
+        
+        // Log feeding event to database
+        console.log('📊 Logging feeding event to database...')
+        const dbResponse = await fetch('/api/feeding-events', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            feeding_time: new Date().toISOString(),
+            trigger_type: animalDetected ? 'automatic' : 'manual',
+            distance: distance,
+            motion_detected: animalDetected
+          })
         })
-      })
-      
-      // Reset cooldown after 60 seconds (longer cooldown to prevent overfeeding)
-      setTimeout(() => {
+        
+        const dbResult = await dbResponse.json()
+        console.log('📊 Database result:', dbResult)
+        
+        // Reset cooldown after 10 seconds (matches ESP32 cooldown for precision feeding)
+        console.log('⏰ Setting 10 second cooldown...')
+        setTimeout(() => {
+          setFeedingCooldown(false)
+          console.log('✅ Feeding cooldown expired - ready for next feeding')
+        }, 10000)
+      } else {
+        console.error('❌ Feed command failed:', commandResult)
         setFeedingCooldown(false)
-      }, 60000)
+      }
       
     } catch (error) {
-      console.error('Failed to send feeding command:', error)
+      console.error('❌ Failed to send feeding command:', error)
       setFeedingCooldown(false)
     }
   }
@@ -181,7 +202,7 @@ export default function Scenario1Page() {
               </h4>
               
               <p className="text-gray-600 mb-6 max-w-md mx-auto">
-                This system uses HC-SR04 ultrasonic sensor for real-time animal detection and automatic feeding. 
+                This system uses HC-SR04 ultrasonic sensor for precise animal detection (2-7cm range) and automatic feeding. 
                 Click below to initialize the system and start monitoring.
               </p>
               
@@ -243,7 +264,7 @@ export default function Scenario1Page() {
                 <span className="font-semibold text-gray-800">Distance (ESP32):</span>
                 <span className={`font-bold text-lg ${
                   state.distance !== undefined && state.distance !== null && state.distance !== -1
-                    ? (state.distance >= 2 && state.distance <= 15 ? 'text-red-600 animate-pulse' : 'text-blue-600')
+                    ? (state.distance >= 2 && state.distance <= 7 ? 'text-red-600 animate-pulse' : 'text-blue-600')
                     : 'text-gray-500'
                 }`}>
                   {state.distance !== undefined && state.distance !== null && state.distance !== -1 
@@ -332,19 +353,19 @@ export default function Scenario1Page() {
 
               {/* Detection Range - Updated to use real ESP32 ultrasonic data */}
               <div className="mt-4">
-                <span className="font-semibold text-gray-800">Detection Range: 2-15 cm</span>
+                <span className="font-semibold text-gray-800">Detection Range: 2-7 cm (Very Close Approach)</span>
                 <div className="mt-2 w-full bg-gray-200 rounded-full h-4">
                   <div 
                     className={`h-4 rounded-full transition-all duration-500 ${
                       // Color based on real distance from ESP32 sensor
                       state.distance !== undefined && state.distance !== null && state.distance !== -1
-                        ? (state.distance >= 2 && state.distance <= 15 ? 'bg-red-500 animate-pulse' : 'bg-blue-500')
+                        ? (state.distance >= 2 && state.distance <= 7 ? 'bg-red-500 animate-pulse' : 'bg-blue-500')
                         : 'bg-gray-400'
                     }`}
                     style={{ 
                       // Use actual ESP32 distance data for progress bar width
                       width: `${state.distance !== undefined && state.distance !== null && state.distance !== -1 
-                        ? Math.min((state.distance / 25) * 100, 100) 
+                        ? Math.min((state.distance / 20) * 100, 100) 
                         : 0}%` 
                     }}
                   />
@@ -352,8 +373,8 @@ export default function Scenario1Page() {
                 <div className="flex justify-between text-xs text-gray-500 mt-1">
                   <span>0cm</span>
                   <span>2cm</span>
-                  <span>15cm</span>
-                  <span>25cm+</span>
+                  <span>7cm</span>
+                  <span>20cm+</span>
                 </div>
                 <div className="text-center mt-2">
                   <span className={`text-sm font-bold ${
@@ -461,11 +482,11 @@ export default function Scenario1Page() {
                   <span className="text-purple-700">Detection Zone:</span>
                   <span className={`ml-2 font-semibold ${
                     state.distance !== undefined && state.distance !== null && state.distance !== -1
-                      ? (state.distance >= 2 && state.distance <= 15 ? 'text-red-600' : 'text-green-600')
+                      ? (state.distance >= 2 && state.distance <= 7 ? 'text-red-600' : 'text-green-600')
                       : 'text-gray-500'
                   }`}>
                     {state.distance !== undefined && state.distance !== null && state.distance !== -1
-                      ? (state.distance >= 2 && state.distance <= 15 ? '🚨 In Range' : '🟢 Clear')
+                      ? (state.distance >= 2 && state.distance <= 7 ? '🚨 In Range' : '🟢 Clear')
                       : '⚠️ No Data'}
                   </span>
                 </div>
@@ -498,7 +519,7 @@ export default function Scenario1Page() {
                 </div>
                 <h4 className="font-bold text-gray-800 mb-2">1. Detection</h4>
                 <p className="text-sm text-gray-600">
-                  HC-SR04 ultrasonic sensor measures distance to detect animals within 2-15cm range
+                  HC-SR04 ultrasonic sensor measures distance to detect animals within 2-7cm range (very close approach)
                 </p>
               </div>
               
@@ -510,7 +531,7 @@ export default function Scenario1Page() {
                 </div>
                 <h4 className="font-bold text-gray-800 mb-2">2. Processing</h4>
                 <p className="text-sm text-gray-600">
-                  ESP32 processes real-time distance measurements with cooldown protection
+                  ESP32 processes real-time distance measurements with 10-second cooldown for precision feeding
                 </p>
               </div>
               

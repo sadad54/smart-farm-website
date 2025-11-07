@@ -1,14 +1,19 @@
 import mqtt from 'mqtt'
 import { supabaseAdmin } from '@/lib/supabase'
 
-// MQTT Configuration
+// MQTT Configuration - HiveMQ Cloud (Updated with new credentials)
 const MQTT_CONFIG = {
-  broker: 'mqtt://test.mosquitto.org:1883',
-  clientId: 'SmartFarm_Dashboard_' + Math.random().toString(16).substr(2, 8),
+  broker: 'wss://4dcaf2b87d5c4e18925c6939161d4a72.s1.eu.hivemq.cloud:8884/mqtt',
+  clientId: 'SmartFarm_Dashboard_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
   options: {
     keepalive: 60,
-    reconnectPeriod: 1000,
+    reconnectPeriod: 5000,      // Increased reconnect delay
     connectTimeout: 30 * 1000,
+    username: 'hivemq.webclient.1762484723853',     // ✅ UPDATED - New HiveMQ Cloud username
+    password: 'Bg$c.@6pA:yhGQdC2H79',               // ✅ UPDATED - New HiveMQ Cloud password
+    protocol: 'wss' as const,
+    clean: true,               // Clean session for web clients
+    rejectUnauthorized: false, // Accept self-signed certificates
     will: {
       topic: 'smartfarm/dashboard/status',
       payload: JSON.stringify({ status: 'offline', timestamp: Date.now() }),
@@ -36,21 +41,56 @@ class SmartFarmMQTTClient {
   private lastSensorData: any = null
   private deviceStatus: string = 'unknown'
   private sensorDataCallbacks: ((data: any) => void)[] = []
+  private connectionAttempts: number = 0
+  private maxRetries: number = 5
+  private isConnecting: boolean = false
 
   constructor() {
     this.connect()
   }
 
-  // Initialize MQTT connection
+  // Initialize MQTT connection to HiveMQ Cloud
   public async connect() {
+    // Prevent multiple simultaneous connection attempts
+    if (this.isConnecting) {
+      console.log('⚠️ Connection attempt already in progress, skipping...')
+      return
+    }
+
+    // Stop retrying after max attempts
+    if (this.connectionAttempts >= this.maxRetries) {
+      console.log(`❌ Maximum connection attempts (${this.maxRetries}) reached. Stopping retries.`)
+      console.log('💡 Possible solutions:')
+      console.log('   1. Check if ESP32 is disconnected (HiveMQ free tier = 1 connection max)')
+      console.log('   2. Verify HiveMQ Cloud account status: https://console.hivemq.cloud/')
+      console.log('   3. Check if credentials have special characters that need escaping')
+      return
+    }
+
     try {
-      console.log('🔌 Connecting to MQTT broker...')
+      this.isConnecting = true
+      this.connectionAttempts++
+
+      console.log(`🌩️ Connecting to HiveMQ Cloud MQTT broker... (Attempt ${this.connectionAttempts}/${this.maxRetries})`)
+      console.log(`📍 Broker: ${MQTT_CONFIG.broker}`)
+      console.log(`👤 Username: ${MQTT_CONFIG.options.username}`)
+      console.log(`🆔 Client ID: ${MQTT_CONFIG.clientId}`)
+      console.log(`🔧 Protocol: ${MQTT_CONFIG.options.protocol}`)
+      console.log(`⏱️ Connect Timeout: ${MQTT_CONFIG.options.connectTimeout}ms`)
+      
+      // Validate broker URL format
+      if (!MQTT_CONFIG.broker.startsWith('wss://')) {
+        throw new Error('Invalid broker URL - must use wss:// for web clients')
+      }
       
       this.client = mqtt.connect(MQTT_CONFIG.broker, MQTT_CONFIG.options)
 
       this.client.on('connect', () => {
-        console.log('✅ MQTT Connected to broker')
+        console.log('✅ HiveMQ Cloud MQTT Connected successfully!')
+        console.log('🔒 Secure WebSocket connection established')
         this.connected = true
+        this.isConnecting = false
+        this.connectionAttempts = 0 // Reset on successful connection
         
         // Subscribe to all device topics
         Object.values(TOPICS).forEach(topic => {
@@ -71,22 +111,59 @@ class SmartFarmMQTTClient {
         this.handleMessage(topic, message)
       })
 
-      this.client.on('error', (error) => {
-        console.error('❌ MQTT Error:', error)
+      this.client.on('error', (error: any) => {
+        console.error('❌ HiveMQ Cloud MQTT Error:', error)
+        
+        // Enhanced error diagnostics
+        if (error.code === 5) {
+          console.error('� MQTT Error Code 5: Connection refused - Not authorized')
+          console.error('   ❌ Username or password is incorrect')
+          console.error('   ❌ Account may be suspended or expired')
+          console.error('   ❌ Client limit may be exceeded')
+          console.error('   💡 Check HiveMQ Cloud console: https://console.hivemq.cloud/')
+        } else if (error.code === 4) {
+          console.error('🚨 MQTT Error Code 4: Connection refused - Bad username or password')
+        } else if (error.code === 3) {
+          console.error('🚨 MQTT Error Code 3: Connection refused - Server unavailable')
+        } else if (error.code === 2) {
+          console.error('🚨 MQTT Error Code 2: Connection refused - Identifier rejected')
+        } else if (error.code === 1) {
+          console.error('🚨 MQTT Error Code 1: Connection refused - Unacceptable protocol version')
+        }
+        
+        console.error(`🔍 Full error details:`, {
+          code: error.code,
+          message: error.message,
+          name: error.name,
+          stack: error.stack?.split('\n')[0]
+        })
+        
         this.connected = false
       })
 
       this.client.on('close', () => {
-        console.log('📡 MQTT Connection closed')
+        console.log('📡 HiveMQ Cloud MQTT Connection closed')
         this.connected = false
       })
 
       this.client.on('reconnect', () => {
-        console.log('🔄 MQTT Reconnecting...')
+        console.log('🔄 HiveMQ Cloud MQTT Reconnecting...')
+        console.log(`🔄 Attempt with Client ID: ${MQTT_CONFIG.clientId}`)
+      })
+
+      this.client.on('disconnect', () => {
+        console.log('🔌 HiveMQ Cloud MQTT Disconnected')
+        this.connected = false
+      })
+
+      this.client.on('offline', () => {
+        console.log('📴 HiveMQ Cloud MQTT Client offline')
+        this.connected = false
       })
 
     } catch (error) {
-      console.error('❌ MQTT Connection failed:', error)
+      console.error('❌ HiveMQ Cloud MQTT Connection failed:', error)
+      console.error('💡 Verify HiveMQ Cloud credentials and cluster availability')
     }
   }
 

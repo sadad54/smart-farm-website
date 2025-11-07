@@ -23,6 +23,9 @@ export default function DashboardPage() {
   const [lightOn, setLightOn] = useState(false)
   const [fanOn, setFanOn] = useState(false) 
   const [waterOn, setWaterOn] = useState(false)
+  
+  // Fan timeout ref to allow manual override
+  const fanTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   // AI Plant Health state
   const [aiHealthScore, setAiHealthScore] = useState<number>(75) // Default fallback score
@@ -55,16 +58,32 @@ export default function DashboardPage() {
 
   const handleFanCommand = async () => {
     try {
-      await sendCommand('B', 'dashboard', { button_type: 'run_fan' })
-      setFanOn(true)
-      console.log('🌪️ Fan turned ON')
-      // Auto turn off after 30 seconds
-      setTimeout(() => {
+      // Clear any existing timeout
+      if (fanTimeoutRef.current) {
+        clearTimeout(fanTimeoutRef.current)
+        fanTimeoutRef.current = null
+      }
+
+      if (fanOn) {
+        // Fan is currently on - turn it off
+        await sendCommand('B', 'dashboard', { button_type: 'stop_fan' })
         setFanOn(false)
-        console.log('🌪️ Fan turned OFF (auto)')
-      }, 30000)
+        console.log('🌪️ Fan turned OFF (manual)')
+      } else {
+        // Fan is currently off - turn it on
+        await sendCommand('B', 'dashboard', { button_type: 'run_fan' })
+        setFanOn(true)
+        console.log('🌪️ Fan turned ON')
+        
+        // Auto turn off after 30 seconds (but can be overridden by manual toggle)
+        fanTimeoutRef.current = setTimeout(() => {
+          setFanOn(false)
+          fanTimeoutRef.current = null
+          console.log('🌪️ Fan turned OFF (auto-timeout)')
+        }, 30000)
+      }
     } catch (error) {
-      console.error('Failed to run fan:', error)
+      console.error('Failed to toggle fan:', error)
     }
   }
 
@@ -95,6 +114,15 @@ export default function DashboardPage() {
     }
     return `${roundToHalf(value)}${unit}`
   }
+
+  // Cleanup timeout on component unmount
+  useEffect(() => {
+    return () => {
+      if (fanTimeoutRef.current) {
+        clearTimeout(fanTimeoutRef.current)
+      }
+    }
+  }, [])
 
   // Callback to receive AI health analysis updates
   const handleAiHealthUpdate = (analysis: any) => {
@@ -203,7 +231,7 @@ export default function DashboardPage() {
   // Get actual water level percentage
   const getWaterLevelPercentage = (): number => {
     const waterLevel = state.waterLevel || 0
-    return Math.max(0, Math.min(100, Math.round(waterLevel)))
+    return Math.max(0, Math.min(100, parseFloat(waterLevel.toFixed(1))))
   }
 
   // Health logging now handled by AI analysis callback in handleAiHealthUpdate
@@ -279,7 +307,7 @@ export default function DashboardPage() {
 
           <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 w-20 h-3 bg-gray-200 rounded-full overflow-hidden border border-gray-300 shadow-sm">
             <div
-              className={`h-full rounded-full transition-all duration-500 ${
+              className={`h-full rounded-full transition-all duration-300 ${
                 getWaterLevelPercentage() > 60 ? 'bg-blue-500' :
                 getWaterLevelPercentage() > 30 ? 'bg-yellow-500' : 'bg-red-500'
               }`}

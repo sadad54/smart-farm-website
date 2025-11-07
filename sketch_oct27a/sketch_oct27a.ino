@@ -3,13 +3,14 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>  // For HiveMQ Cloud secure connection
 // #include <HTTPClient.h>  // REMOVED: MQTT-ONLY mode - no HTTP needed
 #include <ArduinoJson.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <LiquidCrystal_I2C.h>
 #include <dht11.h>
-#include <ESP32_Servo.h>
+#include <ESP32_Servo.h>  // Import the library of servo
 #include <PubSubClient.h>  // MQTT client library
 
 /* ---------------- WIFI CONFIG ---------------- */
@@ -20,12 +21,12 @@ const char* PASS = "Dream2025!";    // ⚠️ CHANGE THIS
 // const char* API_BASE = "...";  // REMOVED: MQTT-ONLY mode - no HTTP API needed
 const char* DEVICE_ID = "farm_001";
 
-/* ---------------- MQTT CONFIG ---------------- */
-const char* MQTT_BROKER = "test.mosquitto.org";     // Free Eclipse Mosquitto broker (⚠️ CHANGE FOR PRODUCTION)  
-const int   MQTT_PORT = 1883;                       // Standard MQTT port
-const char* MQTT_USER = "";                         // Leave empty for public broker
-const char* MQTT_PASS = "";                         // Leave empty for public broker
-const char* MQTT_CLIENT_ID = "SmartFarm_ESP32_001"; // Unique client ID
+/* ---------------- MQTT CONFIG (HiveMQ Cloud) ---------------- */
+const char* MQTT_BROKER = "4dcaf2b87d5c4e18925c6939161d4a72.s1.eu.hivemq.cloud";  // HiveMQ Cloud broker
+const int   MQTT_PORT = 8883;                       // Secure MQTT port for HiveMQ Cloud (ESP32 uses 8883)
+const char* MQTT_USER = "hivemq.webclient.1762484723853";      // ✅ Your HiveMQ Cloud username
+const char* MQTT_PASS = "Bg$c.@6pA:yhGQdC2H79";               // ✅ Your HiveMQ Cloud password
+const char* MQTT_CLIENT_ID = "ESP32_SmartFarm_Device_001"; // ✅ Unique client ID for ESP32
 
 /* ---- MQTT Topics ---- */
 const String TOPIC_SENSORS   = "smartfarm/" + String(DEVICE_ID) + "/sensors/data";
@@ -37,7 +38,7 @@ const String TOPIC_EMERGENCY = "smartfarm/" + String(DEVICE_ID) + "/emergency";
 /* ---------------- PIN MAP ---------------- */
 #define DHT11PIN        17
 #define LEDPIN          27
-#define SERVOPIN        26
+#define SERVOPIN        26        // Servo pin for intelligent feeding system
 #define FANPIN1         19
 #define FANPIN2         18
 #define STEAMPIN        35
@@ -58,17 +59,24 @@ const String TOPIC_EMERGENCY = "smartfarm/" + String(DEVICE_ID) + "/emergency";
 dht11 DHT11;
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 AsyncWebServer server(80);
-Servo myservo;
+Servo myservo;  // create servo object to control a servo
 
-/* ---- MQTT Objects ---- */
-WiFiClient espClient;
+/* ---- MQTT Objects (HiveMQ Cloud - Secure Connection) ---- */
+WiFiClientSecure espClient;
 PubSubClient mqttClient(espClient);
 
 /* ---------------- STATE FLAGS ---------------- */
 static bool ledState = false;
 static bool fanState = false;
-static bool servoState = false;
 static bool systemReady = false;
+
+/* ---- INTELLIGENT FEEDING SYSTEM STATE ---- */
+int pos = 0;                          // variable to store the servo position
+static bool feedingBoxOpen = false;   // Track if feeding box is open or closed
+static bool autoFeedingEnabled = true; // Auto mode vs Manual mode
+static unsigned long lastAutoFeedTime = 0;
+static unsigned long feedingCooldown = 10000; // 10 seconds between auto-feeds to prevent spam
+static bool isFeeding = false;        // Prevents multiple simultaneous feeding operations
 static bool emergencyPressed = false;
 static unsigned long emergencyPressTime = 0;
 static bool emergencyShutdownActive = false;
@@ -90,13 +98,11 @@ unsigned long lastSensorSend = 0;
 unsigned long lastCommandCheck = 0;
 unsigned long lastHeartbeat = 0;
 unsigned long lastLCDUpdate = 0;
-unsigned long servoOpenTime = 0;      // Track when servo was opened
 
 const long sensorInterval    = 5000;   // 5s for sensor updates (reduce cloud requests)
 const long commandInterval   = 100;    // 100ms for ultra-fast command response (faster)
 const long heartbeatInterval = 30000;  // 30s heartbeat
 const long lcdUpdateInterval = 2000;   // 2s LCD refresh
-const long servoAutoCloseInterval = 5000; // 5s auto-close for feeder
 const long emergencyHoldTime = 3000;       // 3s hold time to trigger emergency shutdown
 
 /* ---- MQTT Timing (MQTT-ONLY MODE - More Aggressive) ---- */
@@ -345,66 +351,165 @@ void testBuzzerSystem() {
   Serial.println("✅ Buzzer test completed - 3-tone sequence finished!");
 }
 
-/* ---------------- SERVO TEST FUNCTION ---------------- */
+/* ============================================================
+   INTELLIGENT FEEDING SYSTEM - SCENARIO 1
+   ============================================================ */
 
-
-/* ---------------- SMOOTH SERVO MOVEMENT FUNCTIONS ---------------- */
-void moveServoSmoothly(int targetPosition) {
-  int currentPos = myservo.read();
-  Serial.printf("🔧 Moving servo smoothly from %d° to %d°\n", currentPos, targetPosition);
+// Open feeding box using your exact tested servo movement
+void openFeedingBox() {
+  if (feedingBoxOpen || isFeeding) {
+    Serial.println("⚠️ Feeding box already open or operation in progress");
+    return;
+  }
   
-  if (currentPos < targetPosition) {
-    // Move forward
-    for (int pos = currentPos; pos <= targetPosition; pos += 1) {
-      myservo.write(pos);
-      delay(15); // 15ms delay like in your example
-    }
+  isFeeding = true;
+  Serial.println("🍽️ SCENARIO 1: Opening feeding box door...");
+  Serial.printf("📍 Servo moving from 180° to 80° (OPEN)\n");
+  
+  // Your exact tested movement: 80 to 179 degrees (opening)
+  for (pos = 80; pos <= 179; pos += 1) {
+    myservo.write(pos);
+    delay(15); // Your tested 15ms timing
+  }
+  
+  feedingBoxOpen = true;
+  isFeeding = false;
+  Serial.println("✅ Feeding box OPENED successfully at 179°");
+  Serial.printf("🕐 Box opened at: %lu ms\n", millis());
+}
+
+// Close feeding box using your exact tested servo movement  
+void closeFeedingBox() {
+  if (!feedingBoxOpen || isFeeding) {
+    Serial.println("⚠️ Feeding box already closed or operation in progress");
+    return;
+  }
+  
+  isFeeding = true;
+  Serial.println("🚪 SCENARIO 1: Closing feeding box door...");
+  Serial.printf("📍 Servo moving from 179° to 80° (CLOSE)\n");
+  
+  // Your exact tested movement: 180 to 81 degrees (closing)
+  for (pos = 180; pos >= 81; pos -= 1) {
+    myservo.write(pos);
+    delay(15); // Your tested 15ms timing
+  }
+  
+  feedingBoxOpen = false;
+  isFeeding = false;
+  Serial.println("✅ Feeding box CLOSED successfully at 81°");
+  Serial.printf("🕐 Box closed at: %lu ms\n", millis());
+}
+
+// Complete feeding cycle (open -> wait -> close) - Auto Mode
+void performAutoFeeding() {
+  if (isFeeding) {
+    Serial.println("⚠️ Auto feeding already in progress, skipping...");
+    return;
+  }
+  
+  Serial.println("🤖 AUTO FEEDING: Ultrasonic sensor triggered intelligent feeding");
+  
+  // Open the feeding box
+  openFeedingBox();
+  
+  if (feedingBoxOpen) {
+    Serial.println("⏱️ Auto feeding: Keeping box open for 3 seconds...");
+    delay(3000); // Keep open for 3 seconds for animal to access food
+    
+    // Close the feeding box
+    closeFeedingBox();
+    
+    // Update cooldown timer
+    lastAutoFeedTime = millis();
+    Serial.printf("✅ AUTO FEEDING COMPLETE - Next auto feed available in %lu seconds\n", 
+                 feedingCooldown / 1000);
+  }
+}
+
+// Manual feeding (dashboard/button triggered) - Manual Mode
+void performManualFeeding() {
+  Serial.println("👆 MANUAL FEEDING: User requested feeding operation");
+  
+  if (feedingBoxOpen) {
+    // If already open, close it
+    closeFeedingBox();
   } else {
-    // Move backward
-    for (int pos = currentPos; pos >= targetPosition; pos -= 1) {
-      myservo.write(pos);
-      delay(15); // 15ms delay like in your example
+    // If closed, open it (user can manually close later or it auto-closes)
+    openFeedingBox();
+    Serial.println("💡 Manual mode: Box opened - will auto-close in 5 seconds or use close command");
+    
+    // Optional: Auto-close after 5 seconds in manual mode
+    delay(5000);
+    if (feedingBoxOpen) {
+      Serial.println("🕐 Manual feeding: Auto-closing after 5 seconds...");
+      closeFeedingBox();
     }
   }
-  Serial.printf("✅ Servo reached target position: %d°\n", targetPosition);
 }
 
-void openFeederSmoothly() {
-  Serial.println("📂 Opening feeder smoothly...");
-  moveServoSmoothly(80); // Open position based on your example (80°)
-  servoState = true;
-  servoOpenTime = millis();
-}
-
-void closeFeederSmoothly() {
-  Serial.println("📁 Closing feeder smoothly...");
-  moveServoSmoothly(180); // Closed position (180°)
-  servoState = false;
-  servoOpenTime = 0;
-}
-
-void testServoSmoothly() {
-  Serial.println("🔧 SAFE SERVO TEST - Testing smooth movement like your example...");
-  
-  // Test the same range as your example code (80° to 180°)
-  Serial.println("📍 Moving from 80° to 179° (opening range)");
-  for (int pos = 80; pos <= 179; pos += 1) {
-    myservo.write(pos);
-    delay(15); // Same timing as your example
+// Check if auto-feeding should trigger based on ultrasonic sensor
+void checkAutoFeeding(float distance) {
+  if (!autoFeedingEnabled || isFeeding) {
+    return; // Auto mode disabled or already feeding
   }
   
-  delay(1000); // Pause at full open
+  unsigned long currentTime = millis();
   
-  Serial.println("📍 Moving from 180° to 81° (closing range)");
-  for (int pos = 180; pos >= 81; pos -= 1) {
-    myservo.write(pos);
-    delay(15); // Same timing as your example
+  // Check cooldown to prevent spam feeding
+  if (currentTime - lastAutoFeedTime < feedingCooldown) {
+    return; // Still in cooldown period
   }
   
-  // Return to closed position
-  moveServoSmoothly(180);
-  Serial.println("✅ Safe servo test complete!");
+  // AUTO FEEDING TRIGGER CONDITIONS for Scenario 1
+  const float FEEDING_TRIGGER_DISTANCE = 7.0; // Animal within 5cm triggers feeding (realistic close approach)
+  const float FEEDING_MAX_DISTANCE = 50.0;     // Maximum range to consider (ignore far objects)
+  
+  // Trigger auto feeding when animal approaches
+  if (distance > 0 && distance <= FEEDING_TRIGGER_DISTANCE && distance >= 2.0) {
+    Serial.printf("🐾 ANIMAL DETECTED! Distance: %.1fcm - Triggering intelligent feeding\n", distance);
+    Serial.println("🤖 AUTO MODE: Initiating feeding sequence for detected animal");
+    
+    performAutoFeeding();
+  }
+  
+  // Debug info for feeding range (every 30 seconds)
+  static unsigned long lastFeedingDebug = 0;
+  if (currentTime - lastFeedingDebug >= 30000) {
+    Serial.printf("🍽️ Auto Feeding Status - Enabled: %s, Distance: %.1fcm, Trigger: <%.0fcm\n", 
+                 autoFeedingEnabled ? "YES" : "NO", distance, FEEDING_TRIGGER_DISTANCE);
+    if (currentTime - lastAutoFeedTime < feedingCooldown) {
+      unsigned long remainingCooldown = feedingCooldown - (currentTime - lastAutoFeedTime);
+      Serial.printf("⏳ Cooldown active: %lu seconds remaining\n", remainingCooldown / 1000);
+    } else {
+      Serial.println("✅ Auto feeding ready - waiting for animal detection");
+    }
+    lastFeedingDebug = currentTime;
+  }
 }
+
+// Test the complete feeding system with your exact servo code
+void testIntelligentFeeding() {
+  Serial.println("🔧 INTELLIGENT FEEDING SYSTEM TEST");
+  Serial.println("═════════════════════════════════════");
+  Serial.printf("📍 Using servo on pin %d\n", SERVOPIN);
+  Serial.println("🧪 Testing your exact servo movement pattern...");
+  
+  // Test complete feeding cycle
+  Serial.println("🍽️ Testing OPEN sequence...");
+  openFeedingBox();
+  
+  delay(2000); // Wait 2 seconds
+  
+  Serial.println("🚪 Testing CLOSE sequence...");
+  closeFeedingBox();
+  
+  Serial.println("✅ Intelligent Feeding System test complete!");
+  Serial.println("🤖 Auto mode: Triggers when object detected within 7cm (very close approach)");
+  Serial.println("👆 Manual mode: Dashboard button or FEED command");
+}
+
+
 
 /* ---------------- EMERGENCY SHUTDOWN FUNCTION ---------------- */
 void checkEmergencyButton() {
@@ -568,7 +673,7 @@ void emergencySystemShutdown() {
   digitalWrite(FANPIN2, LOW);
   digitalWrite(RELAYPIN, LOW);      // Turn off water pump
   digitalWrite(BUZZERPIN, LOW);     // Turn off buzzer
-  myservo.write(180);               // Close feeder servo
+  myservo.write(180);              // Emergency: Close feeding box to safe position
   
   // Update LCD with emergency message
   lcd.clear();
@@ -710,10 +815,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.printf("📨 MQTT Message #%d - Topic: %s\n", messageCount, topic);
   Serial.printf("    📄 Payload: %s\n", message.c_str());
   Serial.printf("    🕐 Timestamp: %lu\n", millis());
+  Serial.printf("🔍 DEBUG - Expected topic: %s\n", TOPIC_COMMANDS.c_str());
+  Serial.printf("🔍 DEBUG - Topic match: %s\n", (topicStr == TOPIC_COMMANDS) ? "YES" : "NO");
   
   // Handle command messages
   if (topicStr == TOPIC_COMMANDS) {
     Serial.println("⚡ Processing MQTT command...");
+    Serial.printf("🎯 FEEDING COMMAND DETECTED - This should trigger servo!\n");
     
     // Parse JSON command
     JsonDocument doc;
@@ -768,51 +876,50 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
 }
 
-/* ---------------- MQTT CONNECTION FUNCTION ---------------- */
+/* ---------------- MQTT CONNECTION FUNCTION (HiveMQ Cloud) ---------------- */
 bool connectMQTT() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("❌ WiFi not connected, cannot connect to MQTT");
     return false;
   }
   
+  // Configure secure client for HiveMQ Cloud
+  espClient.setInsecure(); // Skip certificate verification for simplicity (use with caution in production)
+  
   // Configure MQTT client with aggressive settings for MQTT-only mode
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
   mqttClient.setKeepAlive(mqttKeepAlive);
-  mqttClient.setSocketTimeout(10); // 10 second socket timeout
+  mqttClient.setSocketTimeout(15); // 15 second socket timeout for secure connection
   
-  Serial.printf("🔌 MQTT-ONLY: Connecting to broker: %s:%d\n", MQTT_BROKER, MQTT_PORT);
+  Serial.printf("🔌 HiveMQ Cloud: Connecting to broker: %s:%d (Secure)\n", MQTT_BROKER, MQTT_PORT);
   Serial.printf("📋 Client ID: %s (Attempt #%d)\n", MQTT_CLIENT_ID, mqttReconnectAttempts + 1);
+  Serial.printf("👤 Username: %s\n", MQTT_USER);
   
-  // Attempt to connect with more robust error handling
-  bool connected = false;
-  if (strlen(MQTT_USER) > 0) {
-    connected = mqttClient.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS);
-  } else {
-    connected = mqttClient.connect(MQTT_CLIENT_ID);
-  }
+  // HiveMQ Cloud requires authentication
+  bool connected = mqttClient.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS);
   
   if (connected) {
-    Serial.println("✅ MQTT-ONLY: Connected successfully!");
+    Serial.println("✅ HiveMQ Cloud: Connected successfully!");
     mqttConnected = true;
     mqttReconnectAttempts = 0;
     
     // Subscribe to command topic with QoS 1 for reliability
     String commandTopic = TOPIC_COMMANDS;
     if (mqttClient.subscribe(commandTopic.c_str(), 1)) {
-      Serial.printf("📡 MQTT-ONLY: Subscribed to: %s (QoS 1)\n", commandTopic.c_str());
+      Serial.printf("📡 HiveMQ Cloud: Subscribed to: %s (QoS 1)\n", commandTopic.c_str());
     } else {
-      Serial.printf("❌ MQTT-ONLY: Failed to subscribe to: %s\n", commandTopic.c_str());
+      Serial.printf("❌ HiveMQ Cloud: Failed to subscribe to: %s\n", commandTopic.c_str());
     }
     
     // Send connection status
-    sendMqttStatus("connected_mqtt_only");
+    sendMqttStatus("connected_hivemq_cloud");
     
     return true;
   } else {
     // Detailed MQTT error codes
     int state = mqttClient.state();
-    Serial.printf("❌ MQTT-ONLY Connection failed (attempt #%d), state: %d ", mqttReconnectAttempts + 1, state);
+    Serial.printf("❌ HiveMQ Cloud Connection failed (attempt #%d), state: %d ", mqttReconnectAttempts + 1, state);
     switch(state) {
       case -4: Serial.println("(MQTT_CONNECTION_TIMEOUT)"); break;
       case -3: Serial.println("(MQTT_CONNECTION_LOST)"); break;
@@ -896,9 +1003,10 @@ void sendMqttSensorData() {
   doc["water"] = data.waterLevel;
   doc["light"] = data.lightLevel;
   doc["distance"] = data.distance;
-  // Include servo state so MQTT sensor payload reflects actuator status
-  doc["servo"] = servoState;
   doc["motion"] = data.motionDetected ? 1 : 0;
+  // Intelligent Feeding System status
+  doc["feeding_box_open"] = feedingBoxOpen;
+  doc["auto_feeding_enabled"] = autoFeedingEnabled;
   doc["intruder_alert"] = data.intruderAlert ? 1 : 0;
   doc["timestamp"] = millis();
   
@@ -1015,8 +1123,8 @@ float readUltrasonicDistance() {
   Serial.printf("📏 Ultrasonic - Valid readings: %d/3, Average: %.1f cm\n", validCount, avgDistance);
   
   // Special debugging for animal detection range
-  if (avgDistance >= 1 && avgDistance <= 15) {
-    Serial.printf("🚨 DETECTION ZONE: %.1f cm - Animal detection possible!\n", avgDistance);
+  if (avgDistance >= 1 && avgDistance <= 7) {
+    Serial.printf("🚨 DETECTION ZONE: %.1f cm - Animal very close, feeding may trigger!\n", avgDistance);
   }
   
   return avgDistance;
@@ -1199,7 +1307,8 @@ JsonDocument createAPIPayload() {
   JsonObject status = doc["status"].to<JsonObject>();
   status["led"] = ledState;
   status["fan"] = fanState;
-  status["servo"] = servoState;
+  status["feeding_box_open"] = feedingBoxOpen;
+  status["auto_feeding_enabled"] = autoFeedingEnabled;
   status["wifi_rssi"] = WiFi.RSSI();
   status["uptime"] = millis() / 1000;
   
@@ -1211,9 +1320,11 @@ JsonDocument createAPIPayload() {
    ============================================================ */
 void executeAction(String action, int duration_ms) {
   Serial.printf("⚡ Executing: %s (duration: %dms)\n", action.c_str(), duration_ms);
+  Serial.printf("🔍 DEBUG - Raw action: '%s' (length: %d)\n", action.c_str(), action.length());
   
   // Convert action to uppercase for consistent comparison
   action.toUpperCase();
+  Serial.printf("🔍 DEBUG - Uppercase action: '%s'\n", action.c_str());
   
   if (action == "WATER" || action == "D") {
     digitalWrite(RELAYPIN, HIGH);
@@ -1237,21 +1348,33 @@ void executeAction(String action, int duration_ms) {
     digitalWrite(LEDPIN, ledState ? HIGH : LOW);
     Serial.printf("✅ Light %s\n", ledState ? "ON" : "OFF");
   }
+
   else if (action == "FEED" || action == "C") {
-    // Always open the feeder when feed command is received - using SMOOTH movement
-    Serial.println("🍽️ FEED command received - opening feeder safely...");
-    Serial.printf("📍 Servo pin: %d, Current state: %s\n", SERVOPIN, servoState ? "OPEN" : "CLOSED");
-    
-    openFeederSmoothly(); // Use smooth movement to prevent damage
-    
-    Serial.println("✅ Feeder OPENED smoothly at 80° - will auto-close in 5 seconds");
-    Serial.printf("🕐 Open timestamp: %lu\n", servoOpenTime);
+    // SCENARIO 1: Intelligent Feeding System - Manual Mode
+    Serial.println("🍽️ MANUAL FEED command received - Scenario 1 activated");
+    Serial.printf("🔧 DEBUG - isFeeding: %s, feedingBoxOpen: %s\n", 
+                 isFeeding ? "TRUE" : "FALSE", feedingBoxOpen ? "TRUE" : "FALSE");
+    performManualFeeding();
+    Serial.println("✅ Manual feeding operation completed");
   }
-  else if (action == "FEED_CLOSE" || action == "CLOSE_FEEDER") {
-    // Manual close command (optional) - using SMOOTH movement
-    Serial.println("🚪 Manual close command received");
-    closeFeederSmoothly(); // Use smooth movement to prevent damage
-    Serial.println("✅ Feeder MANUALLY CLOSED smoothly at 180°");
+  else if (action == "FEED_AUTO_ON" || action == "AUTO_ON") {
+    // Enable auto-feeding mode
+    autoFeedingEnabled = true;
+    Serial.println("🤖 AUTO FEEDING MODE: ENABLED - Will trigger when animals detected");
+  }
+  else if (action == "FEED_AUTO_OFF" || action == "AUTO_OFF") {
+    // Disable auto-feeding mode  
+    autoFeedingEnabled = false;
+    Serial.println("🤖 AUTO FEEDING MODE: DISABLED - Manual control only");
+  }
+  else if (action == "FEED_CLOSE" || action == "CLOSE_FEED") {
+    // Manual close command for feeding box
+    if (feedingBoxOpen) {
+      Serial.println("🚪 Manual close command received");
+      closeFeedingBox();
+    } else {
+      Serial.println("⚠️ Feeding box already closed");
+    }
   }
   else if (action == "BUZZER" || action == "E") {
     // Enhanced alarm system - combines scarecrow with PIR alarm pattern
@@ -1523,22 +1646,21 @@ void setup() {
   digitalWrite(BUZZERPIN, LOW);
   Serial.println("✅ Buzzer test complete");
   
-  // Servo setup with enhanced testing
-  Serial.println("🔧 Initializing servo...");
+  // Intelligent Feeding System Setup (Scenario 1)
+  Serial.println("🔧 Initializing Intelligent Feeding System...");
   Serial.printf("📍 Servo pin: %d\n", SERVOPIN);
   
-  myservo.attach(SERVOPIN);
-  delay(100);
+  myservo.attach(SERVOPIN);   // attaches the servo on pin 26 to the servo object
+  myservo.write(180);         // Initialize to closed position (your tested code)
+  delay(2000);                // Your tested 2 second delay
   
-  // Initialize servo to closed position smoothly
-  Serial.println("🔧 Initializing servo safely...");
-  myservo.write(180); // Start with closed position
-  delay(500);
-  Serial.println("   Servo initialized at 180° (CLOSED)");
+  feedingBoxOpen = false;     // Ensure state matches position (closed)
+  isFeeding = false;         // Clear any operation flags
+  lastAutoFeedTime = 0;      // Reset cooldown timer
   
-  servoState = false; // Ensure state matches position (closed)
-  servoOpenTime = 0;  // Initialize timer
-  Serial.println("✅ Servo initialization complete - ready for smooth operations");
+  Serial.println("✅ Intelligent Feeding System initialized successfully");
+  Serial.printf("🤖 Auto feeding: %s (triggers at <7cm)\n", autoFeedingEnabled ? "ENABLED" : "DISABLED");
+  Serial.println("👆 Manual feeding: Available via FEED command or dashboard");
   
   // LCD setup
   Serial.println("🔧 Initializing LCD...");
@@ -1628,15 +1750,23 @@ void loop() {
     command.trim();
     if (command == "test_buzzer") {
       testBuzzerSystem();
-    } else if (command == "test_servo") {
-      testServoSmoothly();
+    } else if (command == "test_feeding") {
+      testIntelligentFeeding();
     } else if (command == "feed") {
-      executeAction("FEED", 3000);
+      performManualFeeding();
+    } else if (command == "auto_on") {
+      autoFeedingEnabled = true;
+      Serial.println("🤖 Auto feeding enabled via serial command");
+    } else if (command == "auto_off") {
+      autoFeedingEnabled = false;
+      Serial.println("🤖 Auto feeding disabled via serial command");
     } else if (command == "help") {
       Serial.println("📋 Available commands:");
       Serial.println("   test_buzzer - Test the motion detection buzzer system");
-      Serial.println("   test_servo - Safe servo movement test (based on your ESP32 example)");
-      Serial.println("   feed - Test feeding command directly");
+      Serial.println("   test_feeding - Test complete intelligent feeding system");
+      Serial.println("   feed - Manual feed operation");
+      Serial.println("   auto_on - Enable auto-feeding mode");
+      Serial.println("   auto_off - Disable auto-feeding mode");
       Serial.println("   help - Show this help message");
     }
   }
@@ -1678,6 +1808,13 @@ void loop() {
     lastSensorSend = now;
   }
   
+  // SCENARIO 1: Intelligent Feeding System - Auto Mode Monitor
+  if (systemReady && autoFeedingEnabled) {
+    // Read current distance for auto-feeding logic
+    float currentDistance = readUltrasonicDistance();
+    checkAutoFeeding(currentDistance);
+  }
+  
   // Send MQTT heartbeat with health check
   if (mqttConnected && now - lastMqttHeartbeat >= mqttHeartbeatInterval) {
     sendMqttStatus("mqtt_only_online");
@@ -1711,13 +1848,7 @@ void loop() {
     lastLCDUpdate = now;
   }
   
-  // Auto-close servo feeder after timeout using smooth movement
-  if (servoState && servoOpenTime > 0 && (now - servoOpenTime >= servoAutoCloseInterval)) {
-    Serial.printf("🕐 Auto-closing feeder smoothly - elapsed: %lums/%lums\n", 
-                 (now - servoOpenTime), servoAutoCloseInterval);
-    closeFeederSmoothly(); // Use smooth movement to prevent damage
-    Serial.println("✅ Feeder AUTO-CLOSED smoothly after 5 seconds");
-  }
+
   
   // Check emergency button (CRITICAL - always check)
   checkEmergencyButton();

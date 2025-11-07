@@ -18,7 +18,7 @@ export default function WaterTankCard() {
       <div className="relative mt-8 w-[300px] h-[80px] flex items-end justify-center overflow-hidden">
         {/* Water Waves (below) */}
         <div
-          className="absolute bottom-0 left-0 right-0 overflow-hidden"
+          className="absolute bottom-0 left-0 right-0 overflow-hidden transition-all duration-300"
           style={{
             height: `${waterLevel}%`,
             clipPath: "inset(0 0 0 0 round 12px)",
