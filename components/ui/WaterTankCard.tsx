@@ -1,7 +1,11 @@
+"use client"
+
 import Image from "next/image";
+import { useEspContext } from "@/components/EspProvider";
 
 export default function WaterTankCard() {
-  const waterLevel = 61; // percentage
+  const { state, connected } = useEspContext()
+  const waterLevel = state.waterLevel ?? 61; // Use real-time ESP32 data or fallback
 
   return (
     <div className="relative w-[380*2px] h-[300px] bg-[#9FD6F9] rounded-2xl border-4 border-[#75BDED] flex flex-col items-center justify-center shadow-md">
@@ -39,8 +43,18 @@ export default function WaterTankCard() {
 
       {/* Percentage Text */}
       <p className="absolute bottom-3 text-[13px] font-semibold text-[#204060]">
-        {waterLevel}% Full
+        {waterLevel.toFixed(1)}% Full
       </p>
+      
+      {/* Connection Status Indicator */}
+      <div className={`absolute top-2 right-2 w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-red-400'}`} />
+      
+      {/* Low Level Warning */}
+      {waterLevel < 20 && (
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-red-500/90 text-white px-2 py-1 rounded text-xs font-bold animate-pulse">
+          LOW WATER!
+        </div>
+      )}
     </div>
   );
 }

@@ -21,6 +21,26 @@ export default function MotionSensorCard() {
   const [motionIntensity, setMotionIntensity] = useState(75)
   const [combinedDetection, setCombinedDetection] = useState(false)
   const [detectionType, setDetectionType] = useState<'none' | 'pir' | 'ultrasonic' | 'combined'>('none')
+  const [buzzerActive, setBuzzerActive] = useState(false)
+  const [lastAlertSound, setLastAlertSound] = useState<number>(0)
+  
+  // Simplified alert system state to match ESP32
+  const [intruderAlert, setIntruderAlert] = useState(false)
+  const [alertMessage, setAlertMessage] = useState("")
+  const [distance, setDistance] = useState<number>(999)
+
+  // Force update when ESP state changes
+  useEffect(() => {
+    if (state.distance !== undefined) {
+      setDistance(Number(state.distance) || 999)
+    }
+    if (state.motionDetected !== undefined) {
+      setMotionDetected(Boolean(state.motionDetected))
+    }
+    if (state.intruderAlert !== undefined) {
+      setIntruderAlert(Boolean(state.intruderAlert))
+    }
+  }, [state.distance, state.motionDetected, state.intruderAlert])
 
   // Real-time motion detection from ESP and database
   useEffect(() => {
@@ -41,62 +61,130 @@ export default function MotionSensorCard() {
       )
       .subscribe()
 
-    // Real-time motion detection from ESP sensor data
+    // Simplified real-time motion detection from ESP sensor data
     const motionCheckInterval = setInterval(() => {
+      // Debug: Log ESP state
+      console.log('🔍 ESP State:', {
+        motionDetected: state.motionDetected,
+        distance: state.distance,
+        intruderAlert: state.intruderAlert,
+        hasData: state.motionDetected !== undefined
+      })
+      
+      // Always update distance if available from ESP32
+      if (state.distance !== undefined && state.distance !== null) {
+        const currentDistance = Number(state.distance) || 999
+        setDistance(currentDistance)
+      }
+      
       // Check if we have real sensor data from ESP
       if (state.motionDetected !== undefined && state.motionDetected !== null) {
-        // Use actual combined detection data from ESP
         const currentMotion = Boolean(state.motionDetected)
-        const distance = state.distance || 999
+        const currentIntruderAlert = Boolean(state.intruderAlert)
+        const currentDistance = Number(state.distance) || 999
         
-        // Determine detection type based on sensor correlation
+        // Update states
+        setIntruderAlert(currentIntruderAlert)
+        
+        // Determine alert message based on simplified system
+        let newAlertMessage = ""
+        
+        if (currentIntruderAlert) {
+          // ESP32 intruder alert active (either PIR motion OR ultrasonic < 5cm)
+          const ultrasonicTriggered = currentDistance <= 5
+          const pirTriggered = currentMotion
+          
+          if (ultrasonicTriggered && pirTriggered) {
+            newAlertMessage = `🚨 DUAL DETECTION! PIR + Ultrasonic (${currentDistance.toFixed(1)}cm)`
+          } else if (ultrasonicTriggered) {
+            newAlertMessage = `🚨 CLOSE OBJECT! Ultrasonic triggered (${currentDistance.toFixed(1)}cm)`
+          } else if (pirTriggered) {
+            newAlertMessage = `🚨 MOTION DETECTED! PIR sensor triggered`
+          } else {
+            newAlertMessage = `🚨 INTRUDER ALERT! Distance: ${currentDistance.toFixed(1)}cm`
+          }
+          setBuzzerActive(true)
+        } else if (currentMotion) {
+          newAlertMessage = `Motion detected (PIR only) - Distance: ${currentDistance.toFixed(1)}cm`
+          setBuzzerActive(false)
+        } else {
+          newAlertMessage = `All clear - Distance: ${currentDistance.toFixed(1)}cm`
+          setBuzzerActive(false)
+        }
+        
+        setAlertMessage(newAlertMessage)
+        
+        // Determine detection type for simplified logging
         let newDetectionType: 'none' | 'pir' | 'ultrasonic' | 'combined' = 'none'
         let confidence = 50
         
-        if (currentMotion && distance < 25) {
-          // Combined detection: Both PIR and close distance
-          newDetectionType = 'combined'
-          confidence = 95
-          setCombinedDetection(true)
-        } else if (currentMotion) {
-          // PIR only detection
-          newDetectionType = 'pir'
-          confidence = 75
-        } else if (distance < 30) {
-          // Ultrasonic only detection
-          newDetectionType = 'ultrasonic'
-          confidence = 60
-        }
-        
-        if (currentMotion !== motionDetected) {
-          setMotionDetected(currentMotion)
-          setDetectionType(newDetectionType)
-          setMotionIntensity(confidence)
+        if (currentIntruderAlert) {
+          // Either PIR or ultrasonic (< 5cm) triggered
+          const ultrasonicTriggered = currentDistance <= 5
+          const pirTriggered = currentMotion
           
-          // Log the motion event with enhanced sensor correlation
-          logMotionEvent(currentMotion, distance, confidence, newDetectionType)
+          if (ultrasonicTriggered && pirTriggered) {
+            newDetectionType = 'combined'
+            confidence = 95 // High confidence for dual detection
+          } else if (ultrasonicTriggered) {
+            newDetectionType = 'ultrasonic'
+            confidence = 85 // High confidence for close object
+          } else if (pirTriggered) {
+            newDetectionType = 'pir'
+            confidence = 80 // Good confidence for PIR motion
+          } else {
+            newDetectionType = 'combined'
+            confidence = 75 // General intruder alert
+          }
+        } else if (currentMotion) {
+          newDetectionType = 'pir'
+          confidence = 70 // PIR only, no alarm
         }
         
-        // Reset combined detection after 5 seconds
-        if (combinedDetection && !currentMotion) {
-          setTimeout(() => setCombinedDetection(false), 5000)
+        // Update states - always update distance and message for real-time updates
+        setMotionDetected(currentMotion)
+        setCombinedDetection(currentIntruderAlert)
+        setDetectionType(newDetectionType)
+        setMotionIntensity(confidence)
+        
+        // Log motion event only on state changes
+        if (currentMotion !== motionDetected || currentIntruderAlert !== combinedDetection) {
+          logMotionEvent(currentMotion, currentDistance, confidence, newDetectionType)
+          
+          // Play alert sound for intruder alerts
+          if (currentIntruderAlert) {
+            playAlertSound()
+          }
+        }
+        
+        // Auto-clear local buzzer state when ESP32 clears the alert
+        if (!currentIntruderAlert && buzzerActive) {
+          setBuzzerActive(false)
+          console.log("🔇 Alert cleared by ESP32 - stopping local buzzer")
         }
       } else {
-        // Fallback to simulation if no ESP data
-        const hasMotion = Math.random() > 0.7 // 30% chance of motion
-        if (hasMotion !== motionDetected) {
-          setMotionDetected(hasMotion)
-          setMotionIntensity(Math.floor(Math.random() * 40) + 60) // 60-100%
-          logMotionEvent(hasMotion)
+        // If no motion data but distance is available, still update
+        if (state.distance !== undefined) {
+          const currentDistance = Number(state.distance) || 999
+          setDistance(currentDistance)
+          setAlertMessage(`Monitoring - Distance: ${currentDistance.toFixed(1)}cm`)
+        } else {
+          // Fallback to simulation if no ESP data at all
+          const hasMotion = Math.random() > 0.7 // 30% chance of motion
+          if (hasMotion !== motionDetected) {
+            setMotionDetected(hasMotion)
+            setMotionIntensity(Math.floor(Math.random() * 40) + 60) // 60-100%
+            logMotionEvent(hasMotion)
+          }
         }
       }
-    }, 2000) // Check every 2 seconds for more responsive updates
+    }, 500) // Check every 500ms for real-time updates
 
     return () => {
       motionSubscription.unsubscribe()
       clearInterval(motionCheckInterval)
     }
-  }, [motionDetected])
+  }, [state.motionDetected, state.distance, state.intruderAlert, motionDetected])
 
   const fetchLatestMotionEvent = async () => {
     try {
@@ -134,7 +222,7 @@ export default function MotionSensorCard() {
         pirTriggered, 
         ultrasonicTriggered, 
         confidenceScore,
-        detectionType 
+        detectionType
       })
 
       await supabase
@@ -151,12 +239,13 @@ export default function MotionSensorCard() {
             confidence_score: confidenceScore,
             sensor_data: {
               esp_raw_distance: distance,
-              detection_source: 'enhanced_motion_sensor_card',
+              detection_source: 'motion_sensor_card',
               detection_type: detectionType,
               combined_detection: detectionType === 'combined',
+              intruder_alert: detected && (detectionType === 'combined' || detectionType === 'ultrasonic'),
               timestamp: new Date().toISOString()
             },
-            alarm_triggered: detectionType === 'combined', // Trigger alarm for combined detection
+            alarm_triggered: detected && (detectionType === 'combined' || detectionType === 'ultrasonic'), // Trigger alarm for intruder alerts
             timestamp: new Date().toISOString()
           }
         ])
@@ -165,27 +254,89 @@ export default function MotionSensorCard() {
     }
   }
 
+  // Browser-based alert sound system
+  const playAlertSound = () => {
+    const now = Date.now()
+    // Throttle alerts to prevent spam (minimum 3 seconds between alerts)
+    if (now - lastAlertSound < 3000) return
+    
+    try {
+      // Create a simple buzzer-like alarm sound
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+      const oscillator = audioContext.createOscillator()
+      const gainNode = audioContext.createGain()
+      
+      oscillator.connect(gainNode)
+      gainNode.connect(audioContext.destination)
+      
+      // Scarecrow-style alternating tones
+      oscillator.frequency.setValueAtTime(2500, audioContext.currentTime) // High tone
+      oscillator.frequency.setValueAtTime(1500, audioContext.currentTime + 0.2) // Low tone
+      oscillator.frequency.setValueAtTime(2000, audioContext.currentTime + 0.4) // Mid tone
+      
+      gainNode.gain.setValueAtTime(0.1, audioContext.currentTime)
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.6)
+      
+      oscillator.start()
+      oscillator.stop(audioContext.currentTime + 0.6)
+      
+      setLastAlertSound(now)
+      console.log("🔊 UI Alert sound played")
+    } catch (error) {
+      console.warn("Audio playback failed:", error)
+    }
+  }
+
   return (
     <Card className="bg-yellow-100/90 backdrop-blur-sm rounded-3xl p-6 border-4 border-yellow-400 w-1/2 transition-all duration-500">
       {/* Header */}
       <h3 className="text-2xl font-bold text-orange-900 mb-4">Motion Detection System</h3>
       
-      {/* Sensor Status Panel */}
+      {/* Enhanced Alert Status Panel */}
       <div className="mb-4 space-y-2">
+        {/* Main Alert Status Banner */}
+        <div className={`p-4 rounded-lg border-2 ${
+          intruderAlert ? "bg-gradient-to-r from-red-100 to-red-50 border-red-500 animate-pulse" :
+          motionDetected ? "bg-gradient-to-r from-blue-100 to-blue-50 border-blue-300" :
+          "bg-gradient-to-r from-green-100 to-green-50 border-green-300"
+        }`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className={`w-4 h-4 rounded-full ${
+                intruderAlert ? "bg-red-600 animate-bounce" :
+                motionDetected ? "bg-blue-500 animate-pulse" : "bg-green-500"
+              }`} />
+              <div>
+                <h3 className="font-bold text-gray-800 text-lg">
+                  {intruderAlert ? "🚨 INTRUDER ALERT" :
+                   motionDetected ? "📍 Motion Detected" : "✅ All Clear"}
+                </h3>
+                <p className="text-sm text-gray-700 font-medium">{alertMessage}</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-2xl font-bold text-gray-800">
+                {distance.toFixed(1)}cm
+              </p>
+              <p className="text-sm text-gray-600">Distance</p>
+            </div>
+          </div>
+        </div>
+
         {/* PIR Motion Sensor Status */}
-        <div className={`flex items-center justify-between p-3 rounded-lg border-2 ${
+        <div className={`flex items-center justify-between p-3 rounded-lg border ${
           motionDetected 
-            ? "bg-gradient-to-r from-red-50 to-orange-50 border-red-300" 
-            : "bg-gradient-to-r from-green-50 to-blue-50 border-green-300"
+            ? "bg-blue-50 border-blue-300" 
+            : "bg-gray-50 border-gray-300"
         }`}>
           <div className="flex items-center gap-3">
             <div className={`w-3 h-3 rounded-full ${
-              motionDetected ? "bg-red-500 animate-pulse" : "bg-green-500"
+              motionDetected ? "bg-blue-500 animate-pulse" : "bg-gray-400"
             }`} />
             <div>
               <h4 className="font-semibold text-gray-800 text-sm">PIR Motion</h4>
               <p className="text-xs text-gray-600">
-                {motionDetected ? "Motion Detected!" : "Clear"}
+                {motionDetected ? "Motion Detected!" : "No Motion"}
               </p>
             </div>
           </div>
@@ -197,67 +348,57 @@ export default function MotionSensorCard() {
 
         {/* Ultrasonic Distance Sensor Status */}
         <div className={`flex items-center justify-between p-3 rounded-lg border ${
-          state.distance && state.distance < 30 
-            ? "bg-yellow-50 border-yellow-300" 
-            : "bg-gray-50 border-gray-300"
+          distance <= 5 ? "bg-red-50 border-red-300" :
+          distance <= 15 ? "bg-orange-50 border-orange-300" :
+          distance <= 30 ? "bg-yellow-50 border-yellow-300" :
+          "bg-gray-50 border-gray-300"
         }`}>
           <div className="flex items-center gap-3">
             <div className={`w-3 h-3 rounded-full ${
-              state.distance && state.distance < 30 ? "bg-yellow-500" : "bg-gray-400"
+              distance <= 5 ? "bg-red-500 animate-bounce" :
+              distance <= 15 ? "bg-orange-500 animate-pulse" :
+              distance <= 30 ? "bg-yellow-500" : "bg-gray-400"
             }`} />
             <div>
               <h4 className="font-medium text-gray-700 text-sm">Distance Sensor</h4>
               <p className="text-xs text-gray-500">
-                {state.distance && state.distance < 30 ? "Object Nearby" : "Clear Range"}
+                {distance <= 5 ? "BUZZER ZONE! (<5cm)" :
+                 distance <= 15 ? "CLOSE APPROACH" :
+                 distance <= 30 ? "WARNING ZONE" : "Safe Distance"}
               </p>
             </div>
           </div>
           <div className="text-right">
             <p className="text-base font-semibold text-gray-700">
-              {state.distance ? `${state.distance.toFixed(1)}cm` : 'N/A'}
+              {distance.toFixed(1)}cm
             </p>
             <p className="text-xs text-gray-400">Distance</p>
           </div>
         </div>
 
-        {/* Enhanced Combined Detection Status */}
-        {detectionType === 'combined' && (
-          <div className="p-3 rounded-lg bg-gradient-to-r from-red-50 to-orange-50 border-2 border-red-400 shadow-md">
-            <div className="flex items-center gap-2 mb-1">
-              <div className="w-3 h-3 rounded-full bg-red-500 animate-pulse" />
-              <h4 className="font-bold text-red-800 text-sm">🚨 DUAL SENSOR LOCK ACTIVATED</h4>
+        {/* Intruder Alert Status */}
+        {intruderAlert && (
+          <div className="p-3 rounded-lg border-2 bg-gradient-to-r from-red-100 to-red-50 border-red-500 animate-pulse">
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full bg-red-600 animate-bounce" />
+              <h4 className="font-bold text-gray-800 text-sm">
+                🚨 INTRUDER DETECTED
+              </h4>
             </div>
-            <p className="text-xs text-red-700 ml-5 font-medium">
-              PIR Motion + Close Distance ({state.distance?.toFixed(1)}cm) - High Threat Level!
+            <p className="text-xs text-gray-700 ml-5 font-medium">
+              ESP32 motion system activated • Buzzer {buzzerActive ? "ACTIVE" : "standby"}
             </p>
-            <div className="flex gap-2 mt-2 ml-5">
-              <span className="text-xs bg-red-200 text-red-800 px-2 py-1 rounded-full">🔊 Buzzer Active</span>
-              <span className="text-xs bg-orange-200 text-orange-800 px-2 py-1 rounded-full">📸 Recording</span>
-            </div>
           </div>
         )}
-        
-        {/* PIR Only Detection */}
-        {detectionType === 'pir' && (
-          <div className="p-2 rounded-lg bg-gradient-to-r from-orange-50 to-yellow-50 border border-orange-300">
+
+        {/* Buzzer Status */}
+        {buzzerActive && (
+          <div className="p-2 rounded-lg bg-gradient-to-r from-red-50 to-orange-50 border border-red-300 animate-pulse">
             <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
-              <h4 className="font-medium text-orange-800 text-sm">👁️ PIR Motion Detected</h4>
+              <div className="w-2 h-2 rounded-full bg-red-500 animate-bounce" />
+              <h4 className="font-medium text-red-800 text-sm">� ALARM SYSTEM ACTIVE</h4>
             </div>
-            <p className="text-xs text-orange-600 ml-4">Movement in sensor range - monitoring distance</p>
-          </div>
-        )}
-        
-        {/* Ultrasonic Only Detection */}
-        {detectionType === 'ultrasonic' && (
-          <div className="p-2 rounded-lg bg-gradient-to-r from-yellow-50 to-amber-50 border border-yellow-300">
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-yellow-500" />
-              <h4 className="font-medium text-yellow-800 text-sm">📏 Object Proximity Alert</h4>
-            </div>
-            <p className="text-xs text-yellow-700 ml-4">
-              Object at {state.distance?.toFixed(1)}cm - awaiting motion confirmation
-            </p>
+            <p className="text-xs text-red-600 ml-4">ESP32 buzzer engaged • Threat response protocol active</p>
           </div>
         )}
       </div>
@@ -269,15 +410,21 @@ export default function MotionSensorCard() {
           <div className="relative w-48 h-48 transition-transform duration-500 ease-in-out">
             <Image
               src={
-                motionDetected
-                  ? "SMART FARM/PAGE 8/4x/Asset 111@4x.png" // Detection state
-                  : "SMART FARM/PAGE 8/4x/Asset 175@4x.png"  // Idle state
+                intruderAlert
+                  ? "SMART FARM/PAGE 8/4x/Asset 111@4x.png" // Intruder alert - buzzer active
+                  : motionDetected
+                  ? "SMART FARM/PAGE 8/4x/Asset 110@4x.png" // PIR motion only
+                  : "SMART FARM/PAGE 8/4x/Asset 175@4x.png"  // All clear state
               }
-              alt={motionDetected ? "Motion Detected" : "Monitoring Mode"}
+              alt={
+                intruderAlert ? "Intruder Alert - Buzzer Active!" :
+                motionDetected ? "PIR Motion Detected" :
+                "All Clear - Monitoring"
+              }
               fill
               className={`object-contain transition-all duration-300 ${
-                detectionType === 'combined' ? "scale-110 animate-pulse" :
-                detectionType !== 'none' ? "scale-105" : "opacity-90"
+                intruderAlert ? "scale-125 animate-bounce filter brightness-110" :
+                motionDetected ? "scale-105 animate-pulse" : "opacity-90"
               }`}
             />
             

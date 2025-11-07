@@ -7,15 +7,18 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { action, duration_ms = 3000, device_id = 'farm_001' } = body
 
-    console.log(`⚡ MQTT Command request: ${action} (${duration_ms}ms) for device ${device_id}`)
+    console.log(`⚡ MQTT Command request: "${action}" (type: ${typeof action}) (${duration_ms}ms) for device ${device_id}`)
 
-    // Validate action
-    const validActions = ['LIGHT', 'FAN', 'FEED', 'WATER', 'BUZZER', 'PIR_ALARM']
-    if (!validActions.includes(action?.toUpperCase())) {
+    // Validate action (accept both long names and single letters)
+    const validActions = ['LIGHT', 'FAN', 'FEED', 'WATER', 'BUZZER', 'PIR_ALARM', 'A', 'B', 'C', 'D', 'E', 'P']
+    const upperAction = action?.toString().toUpperCase()
+    console.log(`🔍 Action validation: "${action}" -> "${upperAction}" (valid: ${validActions.includes(upperAction)})`)
+    
+    if (!validActions.includes(upperAction)) {
       return NextResponse.json(
         { 
           success: false, 
-          error: `Invalid action. Must be one of: ${validActions.join(', ')}`,
+          error: `Invalid action. Must be one of: ${validActions.join(', ')} (or single letters A,B,C,D,E,P)`,
           received: action
         },
         { status: 400 }
@@ -36,7 +39,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Send command via MQTT
-    const commandId = smartFarmMQTT.sendCommand(action.toUpperCase(), duration_ms)
+    const commandId = smartFarmMQTT.sendCommand(upperAction, duration_ms)
 
     if (!commandId) {
       return NextResponse.json(
@@ -54,7 +57,7 @@ export async function POST(request: NextRequest) {
       success: true,
       message: `Command '${action}' sent via MQTT`,
       command_id: commandId,
-      action: action.toUpperCase(),
+      action: upperAction,
       duration_ms,
       device_id,
       protocol: 'mqtt',

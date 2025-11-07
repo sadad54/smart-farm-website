@@ -117,9 +117,9 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
     }
   }, [pollInterval])
 
-  // Cloud-based command sending function
+  // MQTT-ONLY command sending function (updated from cloud version)
   async function sendCommand(value: string, location?: string, metadata?: any) {
-    console.log(`🎛️ Sending cloud command: ${value}`)
+    console.log(`🎛️ Sending MQTT-ONLY command: ${value}`)
     
     // Map command to action type
     const getActionType = (cmd: string) => {
@@ -134,30 +134,30 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
     }
 
     try {
-      // Queue command for ESP32 to pick up
-      const response = await fetch('/api/device-commands', {
+      // Send command directly via MQTT (no HTTP fallback)
+      const response = await fetch('/api/mqtt-command', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          device_id: 'farm_001',
           action: value.toUpperCase(),
           duration_ms: 3000,
-          location: location || 'unknown'
+          device_id: 'farm_001'
         })
       })
 
       if (!response.ok) {
-        throw new Error(`Command failed: HTTP ${response.status}`)
+        const errorData = await response.json()
+        throw new Error(`MQTT command failed: ${errorData.error || 'Unknown error'}`)
       }
 
       const result = await response.json()
-      console.log(`✅ Command queued successfully: ${result.command_id}`)
+      console.log(`✅ MQTT command sent successfully: ${result.command_id}`)
       
-      return { ok: true, command_id: result.command_id }
+      return { ok: true, command_id: result.command_id, protocol: 'mqtt' }
       
     } catch (error: any) {
-      console.error('❌ Cloud command failed:', error.message)
-      return { ok: false, error: error.message }
+      console.error('❌ MQTT command failed:', error.message)
+      return { ok: false, error: error.message, protocol: 'mqtt' }
     }
   }
 

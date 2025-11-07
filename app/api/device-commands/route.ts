@@ -64,6 +64,9 @@ export async function POST(request: NextRequest) {
     
     console.log(`📤 Queuing command: ${action} for device: ${device_id}`)
     
+    // Generate MQTT command ID first
+    const mqttCommandId = Date.now().toString()
+    
     // Insert into device_commands table
     const { data: commandData, error: commandError } = await supabase
       .from('device_commands')
@@ -75,6 +78,7 @@ export async function POST(request: NextRequest) {
             duration_ms
           },
           status: 'pending',
+          mqtt_command_id: mqttCommandId,
           created_at: new Date().toISOString()
         }
       ])
@@ -104,11 +108,11 @@ export async function POST(request: NextRequest) {
       // Don't fail the command queuing if history logging fails
     }
     
-    // Also send the command via MQTT to the ESP32
+    // Also send the command via MQTT to the ESP32 using the same command ID
     try {
-      const commandId = smartFarmMQTT.sendCommand(action, duration_ms);
-      if (commandId) {
-        console.log(`📡 MQTT command sent successfully: ${action} (ID: ${commandId})`);
+      const sentCommandId = smartFarmMQTT.sendCommandWithId(action, duration_ms, mqttCommandId);
+      if (sentCommandId) {
+        console.log(`📡 MQTT command sent successfully: ${action} (ID: ${sentCommandId})`);
       } else {
         console.error('❌ MQTT command failed - not connected');
       }

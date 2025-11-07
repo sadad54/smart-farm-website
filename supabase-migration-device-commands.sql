@@ -4,20 +4,36 @@ CREATE TABLE IF NOT EXISTS device_commands (
     device_id VARCHAR(50) NOT NULL DEFAULT 'farm_001',
     command JSONB NOT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    mqtt_command_id VARCHAR(50) NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP WITH TIME ZONE NULL
 );
 
--- Create indexes for better performance
+-- Add mqtt_command_id column to existing table if it doesn't exist
+DO $$ 
+BEGIN 
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'device_commands' 
+        AND column_name = 'mqtt_command_id'
+    ) THEN
+        ALTER TABLE device_commands ADD COLUMN mqtt_command_id VARCHAR(50) NULL;
+    END IF;
+END $$;
+
+-- Create indexes for better performance (after ensuring all columns exist)
 CREATE INDEX IF NOT EXISTS idx_device_commands_device_id ON device_commands(device_id);
 CREATE INDEX IF NOT EXISTS idx_device_commands_status ON device_commands(status);
 CREATE INDEX IF NOT EXISTS idx_device_commands_created_at ON device_commands(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_device_commands_mqtt_command_id ON device_commands(mqtt_command_id);
 
 -- Enable RLS (Row Level Security)
 ALTER TABLE device_commands ENABLE ROW LEVEL SECURITY;
 
 -- Create policy to allow all operations (adjust as needed for production)
+-- Drop existing policy first if it exists, then create new one
+DROP POLICY IF EXISTS "Allow all operations on device_commands" ON device_commands;
 CREATE POLICY "Allow all operations on device_commands" ON device_commands
     FOR ALL USING (true);
 
@@ -44,3 +60,4 @@ CREATE TRIGGER update_device_commands_updated_at
 COMMENT ON TABLE device_commands IS 'Command queue for ESP32 devices to poll and execute';
 COMMENT ON COLUMN device_commands.command IS 'JSON object containing action and parameters';
 COMMENT ON COLUMN device_commands.status IS 'Command status: pending, completed, failed, expired';
+COMMENT ON COLUMN device_commands.mqtt_command_id IS 'MQTT command ID from dashboard for tracking ESP32 acknowledgments';

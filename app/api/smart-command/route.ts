@@ -15,13 +15,15 @@ export async function POST(request: NextRequest) {
 
     console.log(`🎯 Smart command: ${action} for ${device_id}`)
 
-    // Validate action
-    const validActions = ['LIGHT', 'FAN', 'FEED', 'WATER', 'BUZZER', 'PIR_ALARM']
-    if (!validActions.includes(action?.toUpperCase())) {
+    // Validate action (accept both long names and single letters)
+    const validActions = ['LIGHT', 'FAN', 'FEED', 'WATER', 'BUZZER', 'PIR_ALARM', 'A', 'B', 'C', 'D', 'E', 'P']
+    const upperAction = action?.toString().toUpperCase()
+    
+    if (!validActions.includes(upperAction)) {
       return NextResponse.json(
         { 
           success: false, 
-          error: `Invalid action. Must be one of: ${validActions.join(', ')}`,
+          error: `Invalid action. Must be one of: ${validActions.join(', ')} (or single letters A,B,C,D,E,P)`,
           received: action
         },
         { status: 400 }
@@ -36,7 +38,7 @@ export async function POST(request: NextRequest) {
     if (force_protocol !== 'http' && smartFarmMQTT.isConnected()) {
       console.log('📡 Attempting MQTT command...')
       
-      const commandId = smartFarmMQTT.sendCommand(action.toUpperCase(), duration_ms)
+      const commandId = smartFarmMQTT.sendCommand(upperAction, duration_ms)
       
       if (commandId) {
         protocolUsed = 'mqtt'
@@ -52,7 +54,7 @@ export async function POST(request: NextRequest) {
             .from('device_commands')
             .insert({
               device_id,
-              command: { action: action.toUpperCase(), duration_ms },
+              command: { action: upperAction, duration_ms },
               status: 'sent_mqtt',
               created_at: new Date()
             })
@@ -78,7 +80,7 @@ export async function POST(request: NextRequest) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             device_id,
-            command: { action: action.toUpperCase(), duration_ms },
+            command: { action: upperAction, duration_ms },
             status: 'pending'
           })
         })
@@ -116,7 +118,7 @@ export async function POST(request: NextRequest) {
       success: true,
       message: `Command '${action}' sent successfully`,
       command_id: commandResult.command_id,
-      action: action.toUpperCase(),
+      action: upperAction,
       duration_ms,
       device_id,
       protocol_used: protocolUsed,

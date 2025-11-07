@@ -11,6 +11,8 @@ export type EspState = {
   soilHumidity?: number | null
   distance?: number | null
   motionDetected?: boolean | null
+  intruderAlert?: boolean | null
+  alertLevel?: number | null
   raw?: string
 }
 
@@ -67,11 +69,11 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
     }
   }, [])
 
-  // Cloud-based command sending function with fast response
+  // MQTT-ONLY command sending function
   async function sendCommand(value: string, location?: string, metadata?: any) {
-    console.log(`🎛️ Sending cloud command: ${value}`)
+    console.log(`🎛️ Sending MQTT-ONLY command: ${value}`)
     
-    // Map command to action type
+    // Map command to action type for logging
     const getActionType = (cmd: string) => {
       switch(cmd.toUpperCase()) {
         case 'A': return 'light'
@@ -87,17 +89,16 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
     try {
       // Use AbortController for faster timeout
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 3000) // 3 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 5000) // 5 second timeout for MQTT
       
-      // Queue command for ESP32 to pick up
-      const response = await fetch('/api/device-commands', {
+      // Send command directly via MQTT (no HTTP fallback)
+      const response = await fetch('/api/mqtt-command', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          device_id: 'farm_001',
           action: value.toUpperCase(),
           duration_ms: 3000,
-          location: location || 'unknown'
+          device_id: 'farm_001'
         }),
         signal: controller.signal
       })
@@ -105,21 +106,22 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
       clearTimeout(timeoutId)
 
       if (!response.ok) {
-        throw new Error(`Command failed: HTTP ${response.status}`)
+        const errorData = await response.json()
+        throw new Error(`MQTT command failed: ${errorData.error || 'Unknown error'}`)
       }
 
       const result = await response.json()
-      console.log(`✅ Command queued successfully: ${result.command_id}`)
+      console.log(`✅ MQTT command sent successfully: ${result.command_id}`)
       
       // Immediately update state for visual feedback (optimistic update)
       const actionType = getActionType(value)
-      console.log(`🔄 Providing immediate visual feedback for ${actionType}`)
+      console.log(`🔄 MQTT command confirmed for ${actionType}`)
       
-      return { ok: true, command_id: result.command_id }
+      return { ok: true, command_id: result.command_id, protocol: 'mqtt' }
       
     } catch (error: any) {
-      console.error('❌ Cloud command failed:', error.message)
-      return { ok: false, error: error.message }
+      console.error('❌ MQTT command failed:', error.message)
+      return { ok: false, error: error.message, protocol: 'mqtt' }
     }
   }
 

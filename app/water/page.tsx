@@ -60,7 +60,7 @@ interface WateringSchedule {
 }
 
 export default function WaterPage() {
-  const { sendCommand } = useEspContext()
+  const { sendCommand, state, connected } = useEspContext()
   const [wateringHistory, setWateringHistory] = useState<WateringRecord[]>([])
   const [waterTankData, setWaterTankData] = useState<WaterTankData | null>(null)
   const [schedules, setSchedules] = useState<WateringSchedule[]>([])
@@ -68,12 +68,12 @@ export default function WaterPage() {
   const [showScheduleModal, setShowScheduleModal] = useState(false)
   const [editingSchedule, setEditingSchedule] = useState<WateringSchedule | null>(null)
   
-  // Schedule form state
+  // Schedule form state with smart defaults
   const [scheduleForm, setScheduleForm] = useState({
     name: '',
-    plant_type: '',
-    water_amount_ml: 250,
-    duration_ms: 5000,
+    plant_type: 'General', // Auto-default
+    water_amount_ml: 250, // Auto-default
+    duration_ms: 5000, // Auto-default  
     schedule_type: 'daily' as 'once' | 'daily' | 'weekly' | 'custom',
     scheduled_time: '08:00',
     scheduled_days: [] as number[],
@@ -81,6 +81,8 @@ export default function WaterPage() {
     end_date: '',
     is_active: true
   })
+
+
 
   // Fetch watering history
   const fetchWateringHistory = async () => {
@@ -119,74 +121,199 @@ export default function WaterPage() {
     }
   }
 
-  // Save schedule
+
+
+  // Save schedule with validation and auto-configuration
   const saveSchedule = async () => {
+    // Basic validation
+    if (!scheduleForm.name.trim()) {
+      alert('Please enter a schedule name')
+      return
+    }
+    
+    if (scheduleForm.schedule_type === 'weekly' && scheduleForm.scheduled_days.length === 0) {
+      alert('Please select at least one day for weekly schedules')
+      return
+    }
+
+    // Validate date format for one-time schedules
+    if (scheduleForm.schedule_type === 'once') {
+      const selectedDate = new Date(scheduleForm.start_date)
+      const today = new Date()
+      today.setHours(0, 0, 0, 0) // Reset time to compare dates only
+      
+      if (isNaN(selectedDate.getTime())) {
+        alert('Please select a valid date')
+        return
+      }
+      
+      if (selectedDate < today) {
+        alert('Please select a future date')
+        return
+      }
+    }
+
     try {
+      setLoading(true)
       const method = editingSchedule ? 'PUT' : 'POST'
-      const url = editingSchedule 
-        ? `/api/watering-schedules?id=${editingSchedule.id}`
-        : '/api/watering-schedules'
+      const url = '/api/watering-schedules'
+      
+      // Auto-configure all the settings the user doesn't need to worry about
+      // Convert frontend weekday format (0=Sunday) to database format (1=Monday, 7=Sunday)
+      const convertedDays = scheduleForm.scheduled_days.map(day => {
+        // Frontend: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat  
+        // Database: 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat, 7=Sun
+        return day === 0 ? 7 : day; // Convert Sunday from 0 to 7, others stay the same
+      }).sort()
+
+      const scheduleData = {
+        ...(editingSchedule && { id: editingSchedule.id }), // Include ID for updates
+        device_id: 'farm_001',
+        name: scheduleForm.name.trim(),
+        plant_type: scheduleForm.plant_type || 'General',
+        water_amount_ml: scheduleForm.water_amount_ml || 250,
+        duration_ms: scheduleForm.duration_ms || 5000,
+        schedule_type: scheduleForm.schedule_type,
+        scheduled_time: scheduleForm.scheduled_time,
+        scheduled_days: scheduleForm.schedule_type === 'weekly' ? convertedDays : null,
+        start_date: scheduleForm.start_date || new Date().toISOString().split('T')[0],
+        end_date: scheduleForm.end_date && scheduleForm.end_date.trim() ? scheduleForm.end_date : null,
+        is_active: true,
+        timezone: 'UTC'
+      }
+      
+      console.log(`📤 ${editingSchedule ? 'Updating' : 'Creating'} schedule:`, scheduleData)
       
       const response = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(scheduleForm)
+        body: JSON.stringify(scheduleData)
       })
       
-      if (response.ok) {
+      const result = await response.json()
+      console.log(`📥 API Response:`, result)
+      
+      if (response.ok && result.success) {
         setShowScheduleModal(false)
         setEditingSchedule(null)
         resetForm()
         fetchSchedules()
+        
+        // Show success message
+        console.log(`✅ Schedule ${editingSchedule ? 'updated' : 'created'} successfully!`)
+      } else {
+        console.error('Failed to save schedule:', result.error)
+        alert(`Failed to ${editingSchedule ? 'update' : 'create'} schedule: ` + (result.error || 'Unknown error'))
       }
     } catch (error) {
       console.error('Failed to save schedule:', error)
+      alert('Failed to save schedule. Please try again.')
+    } finally {
+      setLoading(false)
     }
   }
 
-  // Delete schedule
+  // Delete schedule with confirmation
   const deleteSchedule = async (id: number) => {
+    const schedule = schedules.find(s => s.id === id)
+    if (!schedule) return
+
+    if (!confirm(`Are you sure you want to delete "${schedule.name}"? This action cannot be undone.`)) {
+      return
+    }
+
     try {
+      setLoading(true)
       const response = await fetch(`/api/watering-schedules?id=${id}`, {
         method: 'DELETE'
       })
       
-      if (response.ok) {
+      const result = await response.json()
+      
+      if (response.ok && result.success) {
+        console.log(`🗑️ Schedule "${schedule.name}" deleted successfully`)
         fetchSchedules()
+      } else {
+        console.error('Failed to delete schedule:', result.error)
+        alert('Failed to delete schedule: ' + (result.error || 'Unknown error'))
       }
     } catch (error) {
       console.error('Failed to delete schedule:', error)
+      alert('Failed to delete schedule. Please try again.')
+    } finally {
+      setLoading(false)
     }
   }
 
   // Execute schedule manually
   const executeSchedule = async (id: number) => {
     try {
+      setLoading(true)
+      
+      // Find the schedule to execute
+      const schedule = schedules.find(s => s.id === id)
+      if (!schedule) {
+        alert('Schedule not found')
+        return
+      }
+
+      console.log(`🔄 Executing schedule: ${schedule.name}`)
+      
+      // Execute the watering command via ESP32
+      await sendCommand('D', 'schedule_execution', {
+        schedule_id: id,
+        plant_type: schedule.plant_type,
+        water_amount_ml: schedule.water_amount_ml,
+        duration_ms: schedule.duration_ms
+      })
+
+      // Log the watering event
+      await fetch('/api/watering', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          device_id: 'farm_001',
+          duration_ms: schedule.duration_ms,
+          water_amount_ml: schedule.water_amount_ml,
+          plant_type: schedule.plant_type,
+          triggered_by: 'manual_schedule'
+        })
+      })
+
+      // Update schedule execution count
       await fetch('/api/watering-schedules/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ schedule_id: id })
       })
       
+      console.log(`✅ Schedule "${schedule.name}" executed successfully!`)
+      
       // Refresh data
-      fetchWateringHistory()
-      fetchWaterTankData()
+      setTimeout(() => {
+        fetchWateringHistory()
+        fetchSchedules()
+      }, 1000)
+      
     } catch (error) {
       console.error('Failed to execute schedule:', error)
+      alert('Failed to execute schedule. Please try again.')
+    } finally {
+      setLoading(false)
     }
   }
 
-  // Reset form
+  // Reset form with smart defaults
   const resetForm = () => {
     setScheduleForm({
       name: '',
-      plant_type: '',
-      water_amount_ml: 250,
-      duration_ms: 5000,
-      schedule_type: 'daily',
-      scheduled_time: '08:00',
+      plant_type: 'General', // Auto-default to General
+      water_amount_ml: 250, // Auto-default to 250ml
+      duration_ms: 5000, // Auto-default to 5 seconds
+      schedule_type: 'daily', // Default to daily
+      scheduled_time: '08:00', // Default morning time
       scheduled_days: [],
-      start_date: new Date().toISOString().split('T')[0],
+      start_date: new Date().toISOString().split('T')[0], // Today's date
       end_date: '',
       is_active: true
     })
@@ -195,6 +322,14 @@ export default function WaterPage() {
   // Edit schedule
   const editSchedule = (schedule: WateringSchedule) => {
     setEditingSchedule(schedule)
+    
+    // Convert database weekday format (1=Mon, 7=Sun) back to frontend format (0=Sun, 1=Mon)
+    const convertedDays = (schedule.scheduled_days || []).map(day => {
+      // Database: 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat, 7=Sun
+      // Frontend: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+      return day === 7 ? 0 : day; // Convert Sunday from 7 to 0, others stay the same
+    }).sort()
+    
     setScheduleForm({
       name: schedule.name,
       plant_type: schedule.plant_type,
@@ -202,7 +337,7 @@ export default function WaterPage() {
       duration_ms: schedule.duration_ms,
       schedule_type: schedule.schedule_type,
       scheduled_time: schedule.scheduled_time,
-      scheduled_days: schedule.scheduled_days || [],
+      scheduled_days: convertedDays,
       start_date: schedule.start_date,
       end_date: schedule.end_date || '',
       is_active: schedule.is_active
@@ -326,14 +461,22 @@ export default function WaterPage() {
           <div className="w-full flex flex-col gap-6">
             {/* Water Tank Card */}
             <Card className="bg-blue-200/90 backdrop-blur-sm rounded-3xl p-6 border-4 border-blue-400">
-              <h3 className={`${poppins.className} text-2xl font-bold text-blue-900 mb-4`}>Water Tank</h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className={`${poppins.className} text-2xl font-bold text-blue-900`}>Water Tank</h3>
+                <div className="flex items-center gap-2">
+                  <div className={`w-3 h-3 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`} />
+                  <span className={`text-sm font-medium ${connected ? 'text-green-600' : 'text-red-600'}`}>
+                    {connected ? 'Live' : 'Offline'}
+                  </span>
+                </div>
+              </div>
               <div className="bg-gradient-to-b from-blue-100 to-blue-300 rounded-2xl p-8 relative overflow-hidden h-64">
                 <div 
                   className={`absolute bottom-0 left-0 right-0 rounded-t-[50px] transition-all duration-1000 ${
-                    waterTankData?.status === 'low' ? 'bg-red-500' : 
-                    waterTankData?.status === 'medium' ? 'bg-yellow-500' : 'bg-blue-500'
+                    (state.waterLevel ?? 61) < 20 ? 'bg-red-500' : 
+                    (state.waterLevel ?? 61) < 50 ? 'bg-yellow-500' : 'bg-blue-500'
                   }`}
-                  style={{ height: `${waterTankData?.current_level_percent || 61}%` }}
+                  style={{ height: `${Math.max(5, state.waterLevel ?? 61)}%` }}
                 >
                   <svg className="absolute top-0 left-0 right-0" viewBox="0 0 1200 100" preserveAspectRatio="none">
                     <path
@@ -347,28 +490,37 @@ export default function WaterPage() {
                 {/* Tank Info */}
                 <div className="absolute top-4 left-4 text-blue-900">
                   <p className="text-sm font-semibold">Capacity: {waterTankData?.capacity_liters || 100}L</p>
-                  <p className="text-xs opacity-75">Est. {waterTankData?.estimated_days_remaining || 6} days remaining</p>
+                  <p className="text-xs opacity-75">Est. {Math.max(1, Math.floor(((state.waterLevel ?? 61) / 100 * 100) / 10))} days remaining</p>
                 </div>
                 
                 {/* Level Display */}
                 <div className="absolute bottom-8 right-8 text-blue-900 font-bold text-2xl">
-                  {waterTankData?.current_level_percent || 61}% Full
+                  {(state.waterLevel ?? 61).toFixed(1)}% Full
                 </div>
                 
                 {/* Current Liters */}
                 <div className="absolute bottom-8 left-8 text-blue-900">
-                  <p className="text-lg font-bold">{waterTankData?.current_liters || 61}L</p>
+                  <p className="text-lg font-bold">{Math.round(((state.waterLevel ?? 61) / 100) * (waterTankData?.capacity_liters || 100))}L</p>
                   <p className="text-xs opacity-75">Current Volume</p>
                 </div>
                 
                 {/* Status Indicator */}
                 <div className={`absolute top-4 right-4 px-3 py-1 rounded-full text-xs font-bold ${
-                  waterTankData?.status === 'low' ? 'bg-red-100 text-red-800' :
-                  waterTankData?.status === 'medium' ? 'bg-yellow-100 text-yellow-800' :
+                  (state.waterLevel ?? 61) < 20 ? 'bg-red-100 text-red-800' :
+                  (state.waterLevel ?? 61) < 50 ? 'bg-yellow-100 text-yellow-800' :
                   'bg-green-100 text-green-800'
                 }`}>
-                  {waterTankData?.status?.toUpperCase() || 'GOOD'}
+                  {(state.waterLevel ?? 61) < 20 ? 'LOW' : (state.waterLevel ?? 61) < 50 ? 'MEDIUM' : 'FULL'}
                 </div>
+
+                {/* Low Level Warning */}
+                {(state.waterLevel ?? 61) < 20 && (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="bg-red-500/90 text-white px-4 py-2 rounded-xl animate-pulse font-bold">
+                      ⚠️ LOW WATER LEVEL!
+                    </div>
+                  </div>
+                )}
               </div>
             </Card>
 
@@ -436,48 +588,75 @@ export default function WaterPage() {
             <Card className="bg-green-200/90 backdrop-blur-sm rounded-3xl p-6 border-4 border-green-400">
               <div className="flex justify-between items-center mb-4">
                 <h3 className={`${poppins.className} text-2xl font-bold text-green-900`}>Scheduled Watering</h3>
-                <Button 
-                  onClick={() => setShowScheduleModal(true)}
-                  className="bg-green-600 hover:bg-green-700"
-                >
-                  <Calendar className="w-4 h-4 mr-2" />
-                  New Schedule
-                </Button>
+                <div className="flex gap-2">
+                  <Button 
+                    onClick={() => handleWatering('D', 'quick_water')}
+                    className="bg-blue-600 hover:bg-blue-700"
+                    size="sm"
+                    disabled={loading}
+                  >
+                    💧 Water Now
+                  </Button>
+                  <Button 
+                    onClick={() => setShowScheduleModal(true)}
+                    className="bg-green-600 hover:bg-green-700"
+                    size="sm"
+                  >
+                    <Calendar className="w-4 h-4 mr-2" />
+                    Schedule
+                  </Button>
+                </div>
               </div>
               <div className="space-y-3 max-h-60 overflow-y-auto">
                 {schedules.length === 0 ? (
-                  <p className="text-green-700 text-center py-4">No schedules created yet</p>
+                  <div className="text-center py-6">
+                    <p className="text-green-700 mb-3">No schedules created yet</p>
+                    <p className="text-sm text-green-600">Click "Schedule" to create your first automated watering schedule</p>
+                  </div>
                 ) : (
                   schedules.map((schedule) => (
-                    <div key={schedule.id} className="bg-white/70 rounded-xl p-4">
+                    <div key={schedule.id} className="bg-white/70 rounded-xl p-4 hover:bg-white/80 transition-colors">
                       <div className="flex justify-between items-start">
                         <div className="flex-1">
                           <div className="flex items-center gap-2 mb-2">
                             <h4 className="font-semibold text-green-900">{schedule.name}</h4>
-                            <Badge variant={schedule.is_active ? "default" : "secondary"}>
+                            <Badge 
+                              variant={schedule.is_active ? "default" : "secondary"}
+                              className={schedule.is_active ? "bg-green-500" : "bg-gray-400"}
+                            >
                               {schedule.is_active ? "Active" : "Inactive"}
                             </Badge>
                           </div>
-                          <p className="text-sm text-green-700">
-                            {schedule.plant_type} • {schedule.water_amount_ml}ml • {schedule.schedule_type}
+                          <p className="text-sm text-green-700 mb-1">
+                            <span className="font-medium">{schedule.plant_type}</span> • 
+                            <span className="mx-1">{schedule.water_amount_ml}ml</span> • 
+                            <span className="capitalize">{schedule.schedule_type}</span>
                           </p>
                           <div className="flex items-center gap-4 mt-2 text-xs text-green-600">
                             <span className="flex items-center gap-1">
                               <Clock className="w-3 h-3" />
                               {schedule.scheduled_time}
                             </span>
-                            {schedule.next_execution && (
-                              <span>Next: {new Date(schedule.next_execution).toLocaleDateString()}</span>
+                            {schedule.schedule_type === 'weekly' && schedule.scheduled_days && (
+                              <span>
+                                Days: {schedule.scheduled_days.map(d => {
+                                  // Convert database format (1=Mon, 7=Sun) back to display names
+                                  const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+                                  return d === 7 ? 'Sun' : dayNames[d - 1]
+                                }).join(', ')}
+                              </span>
                             )}
-                            <span>Runs: {schedule.execution_count}</span>
+                            <span>Executed: {schedule.execution_count} times</span>
                           </div>
                         </div>
-                        <div className="flex gap-2">
+                        <div className="flex gap-1">
                           <Button
                             size="sm"
                             variant="outline"
                             onClick={() => executeSchedule(schedule.id)}
-                            className="h-8 w-8 p-0"
+                            className="h-8 w-8 p-0 hover:bg-green-100"
+                            title="Run now"
+                            disabled={loading}
                           >
                             <Play className="w-3 h-3" />
                           </Button>
@@ -485,7 +664,8 @@ export default function WaterPage() {
                             size="sm"
                             variant="outline"
                             onClick={() => editSchedule(schedule)}
-                            className="h-8 w-8 p-0"
+                            className="h-8 w-8 p-0 hover:bg-blue-100"
+                            title="Edit"
                           >
                             <Edit className="w-3 h-3" />
                           </Button>
@@ -493,7 +673,9 @@ export default function WaterPage() {
                             size="sm"
                             variant="outline"
                             onClick={() => deleteSchedule(schedule.id)}
-                            className="h-8 w-8 p-0 text-red-600 hover:text-red-700"
+                            className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-100"
+                            title="Delete"
+                            disabled={loading}
                           >
                             <Trash2 className="w-3 h-3" />
                           </Button>
@@ -507,152 +689,137 @@ export default function WaterPage() {
           </div>
         </div>
 
-        {/* Schedule Modal */}
+        {/* Super Simple Schedule Modal */}
         <Dialog open={showScheduleModal} onOpenChange={setShowScheduleModal}>
-          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="max-w-md">
             <DialogHeader>
-              <DialogTitle>{editingSchedule ? 'Edit' : 'Create'} Watering Schedule</DialogTitle>
+              <DialogTitle>Schedule Watering</DialogTitle>
               <DialogDescription>
-                Set up automated watering schedules for your plants
+                Just pick a name, date and time - we'll handle the rest!
               </DialogDescription>
             </DialogHeader>
             
-            <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="name">Schedule Name</Label>
-                  <Input
-                    id="name"
-                    value={scheduleForm.name}
-                    onChange={(e) => setScheduleForm({...scheduleForm, name: e.target.value})}
-                    placeholder="e.g., Morning Tomatoes"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="plant_type">Plant Type</Label>
-                  <Input
-                    id="plant_type"
-                    value={scheduleForm.plant_type}
-                    onChange={(e) => setScheduleForm({...scheduleForm, plant_type: e.target.value})}
-                    placeholder="e.g., Tomatoes, Lettuce"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="water_amount">Water Amount (ml)</Label>
-                  <Input
-                    id="water_amount"
-                    type="number"
-                    value={scheduleForm.water_amount_ml}
-                    onChange={(e) => setScheduleForm({...scheduleForm, water_amount_ml: parseInt(e.target.value) || 0})}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="duration">Duration (ms)</Label>
-                  <Input
-                    id="duration"
-                    type="number"
-                    value={scheduleForm.duration_ms}
-                    onChange={(e) => setScheduleForm({...scheduleForm, duration_ms: parseInt(e.target.value) || 0})}
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="schedule_type">Schedule Type</Label>
-                  <Select 
-                    value={scheduleForm.schedule_type} 
-                    onValueChange={(value: 'once' | 'daily' | 'weekly' | 'custom') => 
-                      setScheduleForm({...scheduleForm, schedule_type: value})
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="once">One Time</SelectItem>
-                      <SelectItem value="daily">Daily</SelectItem>
-                      <SelectItem value="weekly">Weekly</SelectItem>
-                      <SelectItem value="custom">Custom Days</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label htmlFor="time">Scheduled Time</Label>
-                  <Input
-                    id="time"
-                    type="time"
-                    value={scheduleForm.scheduled_time}
-                    onChange={(e) => setScheduleForm({...scheduleForm, scheduled_time: e.target.value})}
-                  />
-                </div>
-              </div>
-
-              {(scheduleForm.schedule_type === 'weekly' || scheduleForm.schedule_type === 'custom') && (
-                <div>
-                  <Label>Days of Week</Label>
-                  <div className="flex gap-2 mt-2">
-                    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, index) => (
-                      <div key={day} className="flex items-center space-x-2">
-                        <Checkbox
-                          id={`day-${index}`}
-                          checked={scheduleForm.scheduled_days.includes(index)}
-                          onCheckedChange={(checked) => {
-                            if (checked) {
-                              setScheduleForm({
-                                ...scheduleForm,
-                                scheduled_days: [...scheduleForm.scheduled_days, index].sort()
-                              })
-                            } else {
-                              setScheduleForm({
-                                ...scheduleForm,
-                                scheduled_days: scheduleForm.scheduled_days.filter(d => d !== index)
-                              })
-                            }
-                          }}
-                        />
-                        <Label htmlFor={`day-${index}`} className="text-sm">{day}</Label>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="start_date">Start Date</Label>
-                  <Input
-                    id="start_date"
-                    type="date"
-                    value={scheduleForm.start_date}
-                    onChange={(e) => setScheduleForm({...scheduleForm, start_date: e.target.value})}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="end_date">End Date (Optional)</Label>
-                  <Input
-                    id="end_date"
-                    type="date"
-                    value={scheduleForm.end_date}
-                    onChange={(e) => setScheduleForm({...scheduleForm, end_date: e.target.value})}
-                  />
-                </div>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="is_active"
-                  checked={scheduleForm.is_active}
-                  onCheckedChange={(checked) => setScheduleForm({...scheduleForm, is_active: !!checked})}
+            <div className="space-y-6">
+              {/* Schedule Name */}
+              <div>
+                <Label htmlFor="name">Schedule Name</Label>
+                <Input
+                  id="name"
+                  value={scheduleForm.name}
+                  onChange={(e) => setScheduleForm({...scheduleForm, name: e.target.value})}
+                  placeholder="e.g., Morning Garden Water"
+                  className="mt-1"
                 />
-                <Label htmlFor="is_active">Active Schedule</Label>
+              </div>
+
+              {/* Date (for one-time) or Frequency */}
+              <div>
+                <Label>When to water?</Label>
+                <div className="mt-2 space-y-3">
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="radio"
+                      id="once"
+                      name="frequency"
+                      checked={scheduleForm.schedule_type === 'once'}
+                      onChange={() => setScheduleForm({...scheduleForm, schedule_type: 'once', scheduled_days: []})}
+                      className="text-green-600"
+                    />
+                    <Label htmlFor="once" className="font-normal cursor-pointer">One time only</Label>
+                  </div>
+                  
+                  {scheduleForm.schedule_type === 'once' && (
+                    <div className="ml-6">
+                      <Label htmlFor="date" className="text-sm text-gray-600">Pick date:</Label>
+                      <Input
+                        id="date"
+                        type="date"
+                        value={scheduleForm.start_date}
+                        onChange={(e) => setScheduleForm({...scheduleForm, start_date: e.target.value})}
+                        className="mt-1"
+                        min={new Date().toISOString().split('T')[0]}
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="radio"
+                      id="daily"
+                      name="frequency"
+                      checked={scheduleForm.schedule_type === 'daily'}
+                      onChange={() => setScheduleForm({...scheduleForm, schedule_type: 'daily', scheduled_days: []})}
+                      className="text-green-600"
+                    />
+                    <Label htmlFor="daily" className="font-normal cursor-pointer">Every day</Label>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="radio"
+                      id="weekly"
+                      name="frequency"
+                      checked={scheduleForm.schedule_type === 'weekly'}
+                      onChange={() => setScheduleForm({...scheduleForm, schedule_type: 'weekly', scheduled_days: [1, 3, 5]})} // Default: Mon, Wed, Fri
+                      className="text-green-600"
+                    />
+                    <Label htmlFor="weekly" className="font-normal cursor-pointer">Specific days of the week</Label>
+                  </div>
+
+                  {scheduleForm.schedule_type === 'weekly' && (
+                    <div className="ml-6">
+                      <Label className="text-sm text-gray-600">Select days:</Label>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, index) => (
+                          <Button
+                            key={day}
+                            type="button"
+                            variant={scheduleForm.scheduled_days.includes(index) ? "default" : "outline"}
+                            size="sm"
+                            className="h-8 w-12 text-xs"
+                            onClick={() => {
+                              const days = scheduleForm.scheduled_days.includes(index)
+                                ? scheduleForm.scheduled_days.filter(d => d !== index)
+                                : [...scheduleForm.scheduled_days, index].sort()
+                              setScheduleForm({...scheduleForm, scheduled_days: days})
+                            }}
+                          >
+                            {day}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Time */}
+              <div>
+                <Label htmlFor="time">What time?</Label>
+                <Input
+                  id="time"
+                  type="time"
+                  value={scheduleForm.scheduled_time}
+                  onChange={(e) => setScheduleForm({...scheduleForm, scheduled_time: e.target.value})}
+                  className="mt-1"
+                />
+              </div>
+
+              {/* Auto-configured notice */}
+              <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                <div className="text-sm text-green-800">
+                  <div className="font-medium mb-2">✅ We'll automatically configure:</div>
+                  <ul className="text-xs space-y-1 ml-4">
+                    <li>• Water amount: 250ml (perfect for most plants)</li>
+                    <li>• Plant type: General (suitable for all plants)</li>
+                    <li>• Duration: 5 seconds (optimal watering time)</li>
+                    <li>• Start immediately when you save</li>
+                  </ul>
+                </div>
               </div>
             </div>
 
-            <div className="flex justify-end gap-2">
+            <div className="flex justify-end gap-2 mt-6">
               <Button 
                 variant="outline" 
                 onClick={() => {
@@ -660,11 +827,20 @@ export default function WaterPage() {
                   setEditingSchedule(null)
                   resetForm()
                 }}
+                disabled={loading}
               >
                 Cancel
               </Button>
-              <Button onClick={saveSchedule}>
-                {editingSchedule ? 'Update' : 'Create'} Schedule
+              <Button 
+                onClick={saveSchedule}
+                disabled={loading || !scheduleForm.name.trim() || 
+                  (scheduleForm.schedule_type === 'weekly' && scheduleForm.scheduled_days.length === 0)}
+                className="bg-green-600 hover:bg-green-700"
+              >
+                {loading 
+                  ? (editingSchedule ? 'Updating...' : 'Creating...') 
+                  : (editingSchedule ? '✏️ Update Schedule' : '💧 Create Schedule')
+                }
               </Button>
             </div>
           </DialogContent>

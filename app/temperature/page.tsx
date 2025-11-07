@@ -22,19 +22,32 @@ export default function TemperaturePage() {
   // Get current temperature from ESP state
   const currentTemp = state.temperature || 25
 
+  // Handle auto mode toggle - stop fan when auto mode is disabled
+  useEffect(() => {
+    if (!autoFanEnabled && fanRunning) {
+      // When auto mode is turned off, stop the fan
+      setFanRunning(false)
+    }
+  }, [autoFanEnabled])
+
   // Automatic fan control logic
   useEffect(() => {
-    if (autoFanEnabled && currentTemp > temperatureThreshold) {
-      if (!fanRunning) {
-        handleAutoFanActivation()
-      }
-    } else if (autoFanEnabled && currentTemp <= temperatureThreshold - 2) {
-      // Turn off fan when temperature drops 2 degrees below threshold (hysteresis)
-      if (fanRunning) {
-        setFanRunning(false)
-      }
+    if (!autoFanEnabled) {
+      // If auto mode is disabled, don't change fan state automatically
+      return
     }
-  }, [currentTemp, temperatureThreshold, autoFanEnabled, fanRunning])
+
+    const shouldFanBeRunning = currentTemp > temperatureThreshold
+
+    if (shouldFanBeRunning && !fanRunning) {
+      // Temperature is above threshold - turn on fan
+      handleAutoFanActivation()
+    } else if (!shouldFanBeRunning && fanRunning) {
+      // Temperature is at or below threshold OR threshold was adjusted up - turn off fan
+      // This handles both natural cooling and manual threshold adjustments
+      handleAutoFanDeactivation()
+    }
+  }, [currentTemp, temperatureThreshold, autoFanEnabled])
 
   const handleAutoFanActivation = async () => {
     try {
@@ -43,6 +56,15 @@ export default function TemperaturePage() {
       setLastAutoActivation(new Date())
     } catch (error) {
       console.error('Failed to activate auto fan:', error)
+    }
+  }
+
+  const handleAutoFanDeactivation = async () => {
+    try {
+      await sendCommand('B', 'temperature_page', { button_type: 'auto_fan_deactivation', threshold: temperatureThreshold, current_temp: currentTemp }) // Send fan command to ESP
+      setFanRunning(false)
+    } catch (error) {
+      console.error('Failed to deactivate auto fan:', error)
     }
   }
 
@@ -183,21 +205,22 @@ export default function TemperaturePage() {
               )}
 
               {/* Auto Status Indicator */}
-              <div className={`p-3 rounded-lg text-center font-semibold ${
+              <div className={`p-3 rounded-lg text-center font-semibold transition-all duration-300 ${
                 !autoFanEnabled ? 'bg-gray-100 text-gray-600' :
-                currentTemp > temperatureThreshold ? 'bg-red-100 text-red-700' :
-                'bg-blue-100 text-blue-700'
+                currentTemp > temperatureThreshold ? 'bg-red-100 text-red-700 animate-pulse' :
+                'bg-green-100 text-green-700'
               }`}>
                 {!autoFanEnabled ? 'AUTO MODE DISABLED' :
-                 currentTemp > temperatureThreshold ? `COOLING ACTIVE (${currentTemp}°C > ${temperatureThreshold}°C)` :
-                 `MONITORING (${currentTemp}°C ≤ ${temperatureThreshold}°C)`}
+                 currentTemp > temperatureThreshold ? 
+                   `🔥 COOLING NEEDED (${currentTemp}°C > ${temperatureThreshold}°C) ${fanRunning ? '- FAN ON' : '- STARTING FAN'}` :
+                   `✅ TEMPERATURE OK (${currentTemp}°C ≤ ${temperatureThreshold}°C) ${fanRunning ? '- STOPPING FAN' : '- FAN OFF'}`}
               </div>
             </div>
           </Card>
         </div>
 
         {/* Run Fan button: public/images/buttons/run-fan-button.png */}
-        <div className="absolute bottom-[-200px] right-10 ">
+        <div className="absolute bottom-[-100px] right-10 ">
           <div className="relative w-84 h-30 hover:scale-105 transition-transform cursor-pointer" onClick={handleManualFanToggle}>
             <Image src="SMART FARM/PAGE 9/4x/Asset 124@4x.png" alt="Run Fan Button" fill className="object-contain" />
           </div>

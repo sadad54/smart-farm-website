@@ -35,15 +35,34 @@ export function SmartAlerts() {
 
   const generateAlerts = async () => {
     try {
-      // Determine alert type and severity based on sensor data
+      // Enhanced alert system including intruder detection
       const temperature = state.temperature || 0
       const soilHumidity = state.soilHumidity || 0
       const waterLevel = state.waterLevel || 0
+      const intruderAlert = state.intruderAlert || false
+      const alertLevel = state.alertLevel || 0
+      const distance = state.distance || 999
+      const motionDetected = state.motionDetected || false
       
       let alertType = 'system_status'
       let severity: 'low' | 'medium' | 'high' | 'critical' = 'low'
       
-      if (temperature > 35) {
+      // Priority 1: Security/Intruder Alerts (highest priority)
+      if (intruderAlert && alertLevel >= 3) {
+        alertType = 'critical_intruder_alert'
+        severity = 'critical'
+      } else if (intruderAlert && alertLevel >= 2) {
+        alertType = 'high_intruder_alert'  
+        severity = 'high'
+      } else if (intruderAlert && alertLevel >= 1) {
+        alertType = 'medium_intruder_alert'
+        severity = 'medium'
+      } else if (motionDetected) {
+        alertType = 'motion_detected'
+        severity = 'low'
+      }
+      // Priority 2: Environmental Alerts
+      else if (temperature > 35) {
         alertType = 'high_temperature'
         severity = 'high'
       } else if (temperature < 10) {
@@ -72,7 +91,10 @@ export function SmartAlerts() {
             soilHumidity: state.soilHumidity,
             light: state.light,
             waterLevel: state.waterLevel,
-            motionDetected: state.motionDetected
+            motionDetected: state.motionDetected,
+            intruderAlert: state.intruderAlert,
+            alertLevel: state.alertLevel,
+            distance: state.distance
           },
           deviceStates: {
             wateringActive: false, // Would need device state tracking
@@ -104,9 +126,9 @@ export function SmartAlerts() {
           return [...filtered, newAlert]
         })
 
-        // Play sound for critical alerts
-        if (soundEnabled && severity === 'critical') {
-          playAlertSound()
+        // Play sound for intruder and critical alerts
+        if (soundEnabled && (severity === 'critical' || alertType.includes('intruder'))) {
+          playAlertSound(severity, alertType)
         }
       }
     } catch (error) {
@@ -114,11 +136,11 @@ export function SmartAlerts() {
     }
   }
 
-  const playAlertSound = () => {
+  const playAlertSound = (severity?: string, alertType?: string) => {
     if (typeof window !== 'undefined' && soundEnabled) {
       const audio = new Audio('/alert-sound.mp3')
       audio.play().catch(() => {
-        // Fallback beep sound
+        // Enhanced fallback sound system based on alert level
         const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
         const oscillator = audioContext.createOscillator()
         const gainNode = audioContext.createGain()
@@ -126,11 +148,44 @@ export function SmartAlerts() {
         oscillator.connect(gainNode)
         gainNode.connect(audioContext.destination)
         
-        oscillator.frequency.value = 800
-        gainNode.gain.value = 0.3
-        
-        oscillator.start()
-        oscillator.stop(audioContext.currentTime + 0.3)
+        // Different alert sounds based on severity and type
+        if (alertType?.includes('critical_intruder')) {
+          // Critical intruder: Rapid high-pitched alternating alarm
+          oscillator.frequency.value = 3000
+          gainNode.gain.value = 0.5
+          oscillator.start()
+          oscillator.stop(audioContext.currentTime + 0.1)
+          
+          // Additional rapid beeps
+          setTimeout(() => {
+            const osc2 = audioContext.createOscillator()
+            const gain2 = audioContext.createGain()
+            osc2.connect(gain2)
+            gain2.connect(audioContext.destination)
+            osc2.frequency.value = 2000
+            gain2.gain.value = 0.5
+            osc2.start()
+            osc2.stop(audioContext.currentTime + 0.1)
+          }, 200)
+        } else if (alertType?.includes('intruder')) {
+          // Intruder alerts: Distinctive warning tone
+          oscillator.frequency.value = 2500
+          gainNode.gain.value = 0.4
+          oscillator.start()
+          oscillator.stop(audioContext.currentTime + 0.2)
+        } else if (severity === 'critical') {
+          // Other critical alerts: Standard urgent tone
+          oscillator.frequency.value = 1200
+          gainNode.gain.value = 0.4
+          oscillator.start()
+          oscillator.stop(audioContext.currentTime + 0.4)
+        } else {
+          // Default alert sound
+          oscillator.frequency.value = 800
+          gainNode.gain.value = 0.3
+          oscillator.start()
+          oscillator.stop(audioContext.currentTime + 0.3)
+        }
       })
     }
   }

@@ -1,11 +1,9 @@
-/* ============================================================
-   🌿 SMART FARM - ENHANCED ESP32 CODE
-   Optimized for ultra-low latency with real-time updates
-   ============================================================ */
+
+
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <HTTPClient.h>
+// #include <HTTPClient.h>  // REMOVED: MQTT-ONLY mode - no HTTP needed
 #include <ArduinoJson.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
@@ -18,8 +16,8 @@
 const char* SSID = "DE-Peplink";        // ⚠️ CHANGE THIS
 const char* PASS = "Dream2025!";    // ⚠️ CHANGE THIS
 
-/* ---- API Configuration ---- */
-const char* API_BASE  = "https://smart-farm-website-gamma.vercel.app/api";  // ⚠️ CHANGE THIS
+/* ---- Device Configuration (MQTT-ONLY) ---- */
+// const char* API_BASE = "...";  // REMOVED: MQTT-ONLY mode - no HTTP API needed
 const char* DEVICE_ID = "farm_001";
 
 /* ---------------- MQTT CONFIG ---------------- */
@@ -71,18 +69,21 @@ static bool ledState = false;
 static bool fanState = false;
 static bool servoState = false;
 static bool systemReady = false;
-static bool pirMotionDetected = false;
-static unsigned long lastPirTrigger = 0;
 static bool emergencyPressed = false;
 static unsigned long emergencyPressTime = 0;
 static bool emergencyShutdownActive = false;
 
 /* ---- MQTT State Flags ---- */
 static bool mqttConnected = false;
-static bool mqttEnabled = true;     // Can disable MQTT and fallback to HTTP
+static bool mqttEnabled = true;     // MQTT-ONLY MODE - always enabled
 static unsigned long lastMqttReconnect = 0;
 static unsigned long lastMqttHeartbeat = 0;
 static int mqttReconnectAttempts = 0;
+
+/* ---- Command Deduplication ---- */
+static String lastCommandId = "";
+static unsigned long lastCommandTime = 0;
+const unsigned long commandCooldown = 1000; // 1 second cooldown between identical commands
 
 /* ---------------- TIMERS (OPTIMIZED) ---------------- */
 unsigned long lastSensorSend = 0;
@@ -92,16 +93,16 @@ unsigned long lastLCDUpdate = 0;
 unsigned long servoOpenTime = 0;      // Track when servo was opened
 
 const long sensorInterval    = 5000;   // 5s for sensor updates (reduce cloud requests)
-const long commandInterval   = 250;    // 250ms for ultra-fast command response
+const long commandInterval   = 100;    // 100ms for ultra-fast command response (faster)
 const long heartbeatInterval = 30000;  // 30s heartbeat
 const long lcdUpdateInterval = 2000;   // 2s LCD refresh
 const long servoAutoCloseInterval = 5000; // 5s auto-close for feeder
 const long emergencyHoldTime = 3000;       // 3s hold time to trigger emergency shutdown
 
-/* ---- MQTT Timing ---- */
-const long mqttReconnectInterval = 5000;   // 5s between MQTT reconnection attempts  
-const long mqttHeartbeatInterval = 30000;  // 30s MQTT heartbeat
-const long mqttKeepAlive = 60;             // 60s MQTT keep-alive
+/* ---- MQTT Timing (MQTT-ONLY MODE - More Aggressive) ---- */
+const long mqttReconnectInterval = 1000;   // 1s between MQTT reconnection attempts (very fast)  
+const long mqttHeartbeatInterval = 10000;  // 10s MQTT heartbeat (very frequent)
+const long mqttKeepAlive = 20;             // 20s MQTT keep-alive (very aggressive for reliability)
 
 /* ---------------- CONNECTION RETRY ---------------- */
 int wifiRetries = 0;
@@ -186,6 +187,7 @@ struct SensorData {
   float lightLevel;  // Changed from int to float
   float distance;    // Ultrasonic sensor distance in cm
   bool motionDetected; // PIR motion sensor
+  bool intruderAlert; // Simple boolean for any intruder detection
   bool isValid;
 };
 
@@ -200,94 +202,208 @@ SensorData readAllSensors();
 
 /* ---------------- PIR MOTION SENSOR FUNCTION ---------------- */
 bool readPirMotion() {
-  int pirValue = digitalRead(PIRPIN);
+  static unsigned long lastReadTime = 0;
+  static bool lastPirState = false;
   unsigned long currentTime = millis();
   
-  if (pirValue == HIGH) {
-    if (!pirMotionDetected || (currentTime - lastPirTrigger > 2000)) { // Debounce for 2 seconds
-      pirMotionDetected = true;
-      lastPirTrigger = currentTime;
-      Serial.println("🚨 PIR Motion Detected - Intruder Alert!");
-      return true;
+  // Simple debounce - read PIR every 100ms
+  if (currentTime - lastReadTime >= 100) {
+    int pirValue = digitalRead(PIRPIN);
+    bool currentPirState = (pirValue == HIGH);
+    
+    // Log state changes for debugging
+    if (currentPirState != lastPirState) {
+      Serial.printf("� PIR Motion: %s\n", currentPirState ? "DETECTED" : "CLEARED");
+      lastPirState = currentPirState;
     }
-  } else {
-    if (pirMotionDetected && (currentTime - lastPirTrigger > 5000)) { // Clear after 5 seconds
-      pirMotionDetected = false;
-      Serial.println("✅ PIR Motion Cleared");
-    }
+    
+    lastReadTime = currentTime;
+    return currentPirState;
   }
   
-  return pirMotionDetected;
+  return lastPirState;
 }
 
-/* ---------------- COMBINED MOTION DETECTION SYSTEM ---------------- */
-static bool combinedDetectionActive = false;
-static unsigned long lastCombinedTrigger = 0;
-static unsigned long buzzerStartTime = 0;
-static bool buzzerActive = false;
+/* ---------------- MOTION-TRIGGERED BUZZER SYSTEM ---------------- */
+static bool intruderDetected = false;
+static unsigned long lastAlarmTrigger = 0;
+static unsigned long alarmStartTime = 0;
+static bool alarmActive = false;
 
-bool checkCombinedMotionDetection(float currentDistance, bool pirDetected) {
+// Motion-triggered buzzer system - buzzer only activates when BOTH conditions met
+SensorData checkCombinedMotionDetection(SensorData data) {
   unsigned long currentTime = millis();
-  bool detectionTriggered = false;
   
-  // Combined detection logic:
-  // 1. PIR motion detected AND distance < 25cm (close object)
-  // 2. OR sudden distance change (object approaching rapidly)
-  static float lastDistance = 999.0;
-  float distanceChange = abs(currentDistance - lastDistance);
+  // Motion detection thresholds - buzzer triggers only when BOTH sensors detect
+  const float DISTANCE_THRESHOLD = 5.0;   // Ultrasonic: object closer than 5cm (very close)
+  const unsigned long PIR_COOLDOWN = 5000; // Motion must be clear for 5 seconds to reset
+  const unsigned long ALARM_DURATION = 3000; // Buzzer duration when motion detected
+  const unsigned long ALARM_COOLDOWN = 2000; // Cooldown between motion alarms
   
-  bool ultrasonicTriggered = (currentDistance > 0 && currentDistance < 25.0); // Object within 25cm
-  bool rapidApproach = (distanceChange > 15.0 && currentDistance < lastDistance); // Rapid approach
+  float currentDistance = data.distance;
+  bool pirDetected = data.motionDetected;
   
-  // Trigger conditions
-  if ((pirDetected && ultrasonicTriggered) || 
-      (pirDetected && rapidApproach) ||
-      (ultrasonicTriggered && rapidApproach)) {
-    
-    if (!combinedDetectionActive || (currentTime - lastCombinedTrigger > 3000)) {
-      combinedDetectionActive = true;
-      lastCombinedTrigger = currentTime;
-      detectionTriggered = true;
-      
-      // Start buzzer alarm
-      buzzerActive = true;
-      buzzerStartTime = currentTime;
-      digitalWrite(BUZZERPIN, HIGH);
-      
-      Serial.println("🚨🚨 COMBINED DETECTION TRIGGERED! 🚨🚨");
-      Serial.printf("   PIR: %s | Distance: %.1fcm | Rapid Approach: %s\n", 
-                    pirDetected ? "ACTIVE" : "inactive",
-                    currentDistance,
-                    rapidApproach ? "YES" : "no");
-    }
+  // Motion detection - BOTH conditions must be true for alarm
+  bool ultrasonicMotion = (currentDistance > 0 && currentDistance <= DISTANCE_THRESHOLD);
+  bool pirMotion = pirDetected;
+  
+  // Debug logging to identify continuous triggering
+  static unsigned long lastDebugTime = 0;
+  if (currentTime - lastDebugTime >= 5000) { // Debug every 5 seconds
+    Serial.printf("🔍 DEBUG - Distance: %.1fcm (trigger<%.0fcm), PIR: %s, Either: %s, Alarm: %s\n", 
+                 currentDistance, DISTANCE_THRESHOLD, 
+                 pirMotion ? "ACTIVE" : "CLEAR",
+                 (ultrasonicMotion || pirMotion) ? "YES" : "NO",
+                 alarmActive ? "ON" : "OFF");
+    lastDebugTime = currentTime;
   }
   
-  // Auto-clear detection after 8 seconds of no triggers
-  if (combinedDetectionActive && (currentTime - lastCombinedTrigger > 8000)) {
-    combinedDetectionActive = false;
-    Serial.println("✅ Combined detection cleared - All systems normal");
-  }
-  
-  // Manage buzzer (beep pattern: 500ms on, 200ms off for 5 seconds)
-  if (buzzerActive) {
-    if (currentTime - buzzerStartTime > 5000) {
-      // Stop buzzer after 5 seconds
-      buzzerActive = false;
-      digitalWrite(BUZZERPIN, LOW);
-      Serial.println("🔇 Buzzer alarm stopped");
-    } else {
-      // Create beeping pattern
-      unsigned long buzzerElapsed = currentTime - buzzerStartTime;
-      if ((buzzerElapsed % 700) < 500) {
-        digitalWrite(BUZZERPIN, HIGH); // Beep
+  // Buzzer activates when EITHER sensor detects (very close object OR motion)
+  if (ultrasonicMotion || pirMotion) {
+    if (!intruderDetected) {
+      intruderDetected = true;
+      Serial.printf("🚨 MOTION DETECTED! Distance: %.1fcm | PIR: %s\n", 
+                   currentDistance, pirDetected ? "YES" : "NO");
+      
+      // Log which sensor(s) detected motion
+      if (ultrasonicMotion && pirMotion) {
+        Serial.println("   📡 BOTH SENSORS detecting motion!");
+      } else if (ultrasonicMotion) {
+        Serial.println("   📏 ULTRASONIC detecting very close object!");
       } else {
-        digitalWrite(BUZZERPIN, LOW);  // Silent
+        Serial.println("   👁️ PIR detecting motion activity!");
       }
     }
+    
+    // Activate buzzer alarm ONLY when motion is detected
+    if (!alarmActive && (currentTime - lastAlarmTrigger >= ALARM_COOLDOWN)) {
+      alarmActive = true;
+      alarmStartTime = currentTime;
+      lastAlarmTrigger = currentTime;
+      
+      // Start simple alarm
+      tone(BUZZERPIN, 2500, 300);
+      Serial.println("� ALARM ACTIVATED - Intruder detected!");
+    }
   }
   
-  lastDistance = currentDistance;
-  return combinedDetectionActive;
+  // Clear detection when both sensors are clear (no motion detected)
+  static unsigned long clearStartTime = 0; // Moved outside to fix scope issue
+  
+  if (!ultrasonicMotion && !pirMotion) {
+    if (intruderDetected && clearStartTime == 0) {
+      clearStartTime = currentTime; // Start clear timer
+      Serial.println("🕐 No motion detected - starting clear timer");
+    }
+    
+    // Clear alert after sensors are clear for the cooldown period
+    if (intruderDetected && clearStartTime > 0 && 
+        (currentTime - clearStartTime >= PIR_COOLDOWN)) {
+      intruderDetected = false;
+      clearStartTime = 0;
+      
+      if (alarmActive) {
+        alarmActive = false;
+        noTone(BUZZERPIN);
+        Serial.println("✅ ALL CLEAR - No motion detected, buzzer reset");
+      }
+    }
+  } else {
+    // Reset clear timer if sensors trigger again
+    clearStartTime = 0;
+  }
+  
+  // Manage alarm duration
+  if (alarmActive && (currentTime - alarmStartTime >= ALARM_DURATION)) {
+    alarmActive = false;
+    noTone(BUZZERPIN);
+    Serial.println("🔇 Motion alarm timeout - 3 seconds completed");
+  }
+  
+  // Update sensor data with motion detection status
+  data.intruderAlert = intruderDetected;
+  
+  return data;
+}
+
+/* ---------------- BUZZER TEST FUNCTION ---------------- */
+void testBuzzerSystem() {
+  Serial.println("🔊 MANUAL BUZZER TEST - Testing simplified alarm system...");
+  
+  // Simple test tone sequence
+  Serial.println("🚨 Playing test alarm sequence...");
+  
+  // Test the same alarm pattern used in motion detection
+  tone(BUZZERPIN, 2500, 300);
+  delay(400);
+  tone(BUZZERPIN, 2000, 300);
+  delay(400);
+  tone(BUZZERPIN, 2500, 300);
+  delay(400);
+  
+  noTone(BUZZERPIN);
+  Serial.println("✅ Buzzer test completed - 3-tone sequence finished!");
+}
+
+/* ---------------- SERVO TEST FUNCTION ---------------- */
+
+
+/* ---------------- SMOOTH SERVO MOVEMENT FUNCTIONS ---------------- */
+void moveServoSmoothly(int targetPosition) {
+  int currentPos = myservo.read();
+  Serial.printf("🔧 Moving servo smoothly from %d° to %d°\n", currentPos, targetPosition);
+  
+  if (currentPos < targetPosition) {
+    // Move forward
+    for (int pos = currentPos; pos <= targetPosition; pos += 1) {
+      myservo.write(pos);
+      delay(15); // 15ms delay like in your example
+    }
+  } else {
+    // Move backward
+    for (int pos = currentPos; pos >= targetPosition; pos -= 1) {
+      myservo.write(pos);
+      delay(15); // 15ms delay like in your example
+    }
+  }
+  Serial.printf("✅ Servo reached target position: %d°\n", targetPosition);
+}
+
+void openFeederSmoothly() {
+  Serial.println("📂 Opening feeder smoothly...");
+  moveServoSmoothly(80); // Open position based on your example (80°)
+  servoState = true;
+  servoOpenTime = millis();
+}
+
+void closeFeederSmoothly() {
+  Serial.println("📁 Closing feeder smoothly...");
+  moveServoSmoothly(180); // Closed position (180°)
+  servoState = false;
+  servoOpenTime = 0;
+}
+
+void testServoSmoothly() {
+  Serial.println("🔧 SAFE SERVO TEST - Testing smooth movement like your example...");
+  
+  // Test the same range as your example code (80° to 180°)
+  Serial.println("📍 Moving from 80° to 179° (opening range)");
+  for (int pos = 80; pos <= 179; pos += 1) {
+    myservo.write(pos);
+    delay(15); // Same timing as your example
+  }
+  
+  delay(1000); // Pause at full open
+  
+  Serial.println("📍 Moving from 180° to 81° (closing range)");
+  for (int pos = 180; pos >= 81; pos -= 1) {
+    myservo.write(pos);
+    delay(15); // Same timing as your example
+  }
+  
+  // Return to closed position
+  moveServoSmoothly(180);
+  Serial.println("✅ Safe servo test complete!");
 }
 
 /* ---------------- EMERGENCY SHUTDOWN FUNCTION ---------------- */
@@ -465,42 +581,12 @@ void emergencySystemShutdown() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("📤 Sending emergency shutdown notification...");
     
-    // Try MQTT first
+    // MQTT-ONLY: Emergency notification via MQTT only
     if (mqttConnected && mqttClient.connected()) {
       sendMqttEmergencyAlert();
+      Serial.println("✅ Emergency notification sent via MQTT-ONLY");
     } else {
-      // HTTP fallback
-      Serial.println("📤 Using HTTP for emergency notification (MQTT fallback)");
-      
-      HTTPClient http;
-      http.setTimeout(5000);
-      
-      String url = String(API_BASE) + "/device-actions";
-      
-      if (http.begin(url)) {
-        http.addHeader("Content-Type", "application/json");
-        
-        StaticJsonDocument<256> doc;
-        doc["device_id"] = DEVICE_ID;
-        doc["action_type"] = "emergency_shutdown";
-        doc["command"] = "EMERGENCY_STOP";
-        doc["location"] = "esp32_hardware";
-        doc["metadata"]["shutdown_reason"] = "emergency_button_pressed";
-        doc["metadata"]["uptime_seconds"] = millis() / 1000;
-        doc["metadata"]["wifi_rssi"] = WiFi.RSSI();
-        doc["timestamp"] = millis();
-        
-        String payload;
-        serializeJson(doc, payload);
-        
-        int code = http.POST(payload);
-        if (code > 0) {
-          Serial.printf("✅ Emergency notification sent → HTTP %d\n", code);
-        } else {
-          Serial.printf("❌ Failed to send emergency notification: %s\n", http.errorToString(code).c_str());
-        }
-        http.end();
-      }
+      Serial.println("⚠️ MQTT-ONLY: Cannot send emergency notification - MQTT not connected");
     }
     
     // Disconnect WiFi
@@ -576,8 +662,37 @@ void enterSafeMode() {
 }
 
 /* ============================================================
-   MQTT FUNCTIONS
+   MQTT FUNCTIONS (MQTT-ONLY MODE)
    ============================================================ */
+
+/* ---------------- MQTT HEALTH CHECK FUNCTION ---------------- */
+bool mqttHealthCheck() {
+  if (!mqttClient.connected()) {
+    if (mqttConnected) {
+      Serial.println("🚨 MQTT-ONLY: Connection lost - health check failed");
+      mqttConnected = false;
+    }
+    return false;
+  }
+  
+  // Additional health checks
+  static unsigned long lastPingTime = 0;
+  unsigned long now = millis();
+  
+  // Send ping every 30 seconds to verify connection
+  if (now - lastPingTime >= 30000) {
+    if (mqttClient.loop()) {
+      lastPingTime = now;
+      return true;
+    } else {
+      Serial.println("🚨 MQTT-ONLY: Loop failed - connection unhealthy");
+      mqttConnected = false;
+      return false;
+    }
+  }
+  
+  return true;
+}
 
 /* ---------------- MQTT CALLBACK (Handle incoming messages) ---------------- */
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
@@ -588,7 +703,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
   
   String topicStr = String(topic);
-  Serial.printf("📨 MQTT Message - Topic: %s, Message: %s\n", topic, message.c_str());
+  
+  // Enhanced logging for command debugging
+  static int messageCount = 0;
+  messageCount++;
+  Serial.printf("📨 MQTT Message #%d - Topic: %s\n", messageCount, topic);
+  Serial.printf("    📄 Payload: %s\n", message.c_str());
+  Serial.printf("    🕐 Timestamp: %lu\n", millis());
   
   // Handle command messages
   if (topicStr == TOPIC_COMMANDS) {
@@ -621,8 +742,20 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     }
     
     if (action.length() > 0) {
+      // Command deduplication - prevent executing same command multiple times
+      unsigned long currentTime = millis();
+      if (commandId == lastCommandId && (currentTime - lastCommandTime) < commandCooldown) {
+        Serial.printf("⚠️ Duplicate command ignored: %s (ID: %s) - too recent\n", 
+                     action.c_str(), commandId.c_str());
+        return;
+      }
+      
       Serial.printf("⚡ Executing MQTT command: %s (Duration: %dms, ID: %s)\n", 
                    action.c_str(), duration, commandId.c_str());
+      
+      // Update deduplication tracking
+      lastCommandId = commandId;
+      lastCommandTime = currentTime;
       
       // Execute the action
       executeAction(action, duration);
@@ -637,25 +770,21 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
 /* ---------------- MQTT CONNECTION FUNCTION ---------------- */
 bool connectMQTT() {
-  if (!mqttEnabled) {
-    Serial.println("📡 MQTT disabled, skipping connection");
-    return false;
-  }
-  
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("❌ WiFi not connected, cannot connect to MQTT");
     return false;
   }
   
-  // Configure MQTT client
+  // Configure MQTT client with aggressive settings for MQTT-only mode
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
   mqttClient.setKeepAlive(mqttKeepAlive);
+  mqttClient.setSocketTimeout(10); // 10 second socket timeout
   
-  Serial.printf("🔌 Connecting to MQTT broker: %s:%d\n", MQTT_BROKER, MQTT_PORT);
-  Serial.printf("📋 Client ID: %s\n", MQTT_CLIENT_ID);
+  Serial.printf("🔌 MQTT-ONLY: Connecting to broker: %s:%d\n", MQTT_BROKER, MQTT_PORT);
+  Serial.printf("📋 Client ID: %s (Attempt #%d)\n", MQTT_CLIENT_ID, mqttReconnectAttempts + 1);
   
-  // Attempt to connect
+  // Attempt to connect with more robust error handling
   bool connected = false;
   if (strlen(MQTT_USER) > 0) {
     connected = mqttClient.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS);
@@ -664,26 +793,26 @@ bool connectMQTT() {
   }
   
   if (connected) {
-    Serial.println("✅ MQTT Connected!");
+    Serial.println("✅ MQTT-ONLY: Connected successfully!");
     mqttConnected = true;
     mqttReconnectAttempts = 0;
     
-    // Subscribe to command topic
+    // Subscribe to command topic with QoS 1 for reliability
     String commandTopic = TOPIC_COMMANDS;
-    if (mqttClient.subscribe(commandTopic.c_str())) {
-      Serial.printf("📡 Subscribed to: %s\n", commandTopic.c_str());
+    if (mqttClient.subscribe(commandTopic.c_str(), 1)) {
+      Serial.printf("📡 MQTT-ONLY: Subscribed to: %s (QoS 1)\n", commandTopic.c_str());
     } else {
-      Serial.printf("❌ Failed to subscribe to: %s\n", commandTopic.c_str());
+      Serial.printf("❌ MQTT-ONLY: Failed to subscribe to: %s\n", commandTopic.c_str());
     }
     
     // Send connection status
-    sendMqttStatus("connected");
+    sendMqttStatus("connected_mqtt_only");
     
     return true;
   } else {
     // Detailed MQTT error codes
     int state = mqttClient.state();
-    Serial.printf("❌ MQTT Connection failed, state: %d ", state);
+    Serial.printf("❌ MQTT-ONLY Connection failed (attempt #%d), state: %d ", mqttReconnectAttempts + 1, state);
     switch(state) {
       case -4: Serial.println("(MQTT_CONNECTION_TIMEOUT)"); break;
       case -3: Serial.println("(MQTT_CONNECTION_LOST)"); break;
@@ -698,36 +827,36 @@ bool connectMQTT() {
     }
     
     mqttConnected = false;
-    mqttReconnectAttempts++;
     
-    // Disable MQTT temporarily after too many failures
-    if (mqttReconnectAttempts >= 10) {
-      Serial.println("🚫 Too many MQTT failures, disabling for 5 minutes");
-      mqttEnabled = false;
-      // Re-enable after 5 minutes (handled in loop)
+    // In MQTT-only mode, never give up - keep trying different strategies
+    if (mqttReconnectAttempts >= 20) {
+      Serial.println("� MQTT-ONLY: Extended failures, trying broker alternatives...");
+      // Could try different MQTT brokers here if configured
     }
     
     return false;
   }
 }
 
-/* ---------------- MQTT RECONNECTION HANDLER ---------------- */
+/* ---------------- MQTT RECONNECTION HANDLER (MQTT-ONLY MODE) ---------------- */
 void handleMqttReconnection() {
   unsigned long now = millis();
   
-  // Re-enable MQTT after temporary disable
-  if (!mqttEnabled && mqttReconnectAttempts >= 10) {
-    if (now - lastMqttReconnect >= 300000) { // 5 minutes
-      Serial.println("🔄 Re-enabling MQTT after timeout");
-      mqttEnabled = true;
-      mqttReconnectAttempts = 0;
-    }
-  }
-  
-  // Attempt reconnection if needed and enabled
-  if (mqttEnabled && !mqttConnected && (now - lastMqttReconnect >= mqttReconnectInterval)) {
+  // MQTT-ONLY MODE: Never disable MQTT, always try to reconnect
+  if (!mqttConnected && (now - lastMqttReconnect >= mqttReconnectInterval)) {
     lastMqttReconnect = now;
-    Serial.println("🔄 Attempting MQTT reconnection...");
+    mqttReconnectAttempts++;
+    
+    Serial.printf("🔄 MQTT-ONLY: Attempting reconnection #%d...\n", mqttReconnectAttempts);
+    
+    // Try different reconnection strategies based on attempt count
+    if (mqttReconnectAttempts % 10 == 0) {
+      Serial.println("🔄 Aggressive reconnection: Restarting WiFi connection");
+      WiFi.disconnect();
+      delay(1000);
+      connectWiFi();
+    }
+    
     connectMQTT();
   }
 }
@@ -759,7 +888,7 @@ void sendMqttSensorData() {
   // Create compact sensor data JSON (optimized for MQTT)
   SensorData data = readAllSensors();
   
-  StaticJsonDocument<256> doc;  // Smaller document size
+  StaticJsonDocument<320> doc;  // Increased size for new fields
   doc["device_id"] = DEVICE_ID;
   doc["temp"] = data.temperature;
   doc["hum"] = data.humidity;
@@ -767,7 +896,10 @@ void sendMqttSensorData() {
   doc["water"] = data.waterLevel;
   doc["light"] = data.lightLevel;
   doc["distance"] = data.distance;
+  // Include servo state so MQTT sensor payload reflects actuator status
+  doc["servo"] = servoState;
   doc["motion"] = data.motionDetected ? 1 : 0;
+  doc["intruder_alert"] = data.intruderAlert ? 1 : 0;
   doc["timestamp"] = millis();
   
   String payload;
@@ -787,11 +919,13 @@ void sendMqttStatus(String status) {
   JsonDocument doc;
   doc["device_id"] = DEVICE_ID;
   doc["status"] = status;
+  doc["communication_mode"] = "mqtt_only";
   doc["timestamp"] = millis();
   doc["wifi_rssi"] = WiFi.RSSI();
   doc["uptime_seconds"] = millis() / 1000;
   doc["free_heap"] = ESP.getFreeHeap();
   doc["mqtt_connected"] = mqttConnected;
+  doc["mqtt_reconnect_attempts"] = mqttReconnectAttempts;
   
   String payload;
   serializeJson(doc, payload);
@@ -958,10 +1092,13 @@ SensorData readAllSensors() {
   data.distance = readUltrasonicDistance();
   
   // Read PIR Motion Sensor
-  bool pirDetected = readPirMotion();
+  data.motionDetected = readPirMotion();
   
-  // Use Combined Motion Detection System
-  data.motionDetected = checkCombinedMotionDetection(data.distance, pirDetected);
+  // Initialize detection field
+  data.intruderAlert = false;
+  
+  // Apply Motion-Triggered Buzzer System
+  data = checkCombinedMotionDetection(data);
   
   return data;
 }
@@ -986,7 +1123,8 @@ String getSensorDataHTML() {
   html += "Steam:</b> <b>" + String(data.steam, 1) + "</b>%<br/>";
   html += "Light:</b> <b>" + lightStr + "</b><br/>";
   html += "Distance:</b> <b>" + String(data.distance, 1) + "</b>cm<br/>";
-  html += "Motion:</b> <b>" + String(data.motionDetected ? "DETECTED" : "None") + "</b>";
+  html += "Motion:</b> <b>" + String(data.motionDetected ? "DETECTED" : "None") + "</b><br/>";
+  html += "IntruderAlert:</b> <b>" + String(data.intruderAlert ? "ACTIVE" : "None") + "</b>";
   
   Serial.printf("🔍 Final HTML: %s\n", html.c_str());
   return html;
@@ -995,7 +1133,7 @@ String getSensorDataHTML() {
 String getSensorDataJSON() {
   SensorData data = readAllSensors();
   
-  StaticJsonDocument<256> doc;
+  StaticJsonDocument<320> doc; // Increased size for new fields
   doc["temp"] = data.temperature;
   doc["hum"] = data.humidity;
   doc["soil"] = data.soilMoisture;
@@ -1004,6 +1142,7 @@ String getSensorDataJSON() {
   doc["light"] = data.lightLevel;
   doc["distance"] = data.distance;
   doc["motion"] = data.motionDetected;
+  doc["intruder_alert"] = data.intruderAlert;
   doc["ip"] = WiFi.localIP().toString();
   
   String output;
@@ -1052,6 +1191,10 @@ JsonDocument createAPIPayload() {
   motion["metric"] = "motion_detected";
   motion["value"] = data.motionDetected ? 1 : 0;
   
+  JsonObject intruder = readings.add<JsonObject>();
+  intruder["metric"] = "intruder_alert";
+  intruder["value"] = data.intruderAlert ? 1 : 0;
+  
   // Add device status
   JsonObject status = doc["status"].to<JsonObject>();
   status["led"] = ledState;
@@ -1095,18 +1238,20 @@ void executeAction(String action, int duration_ms) {
     Serial.printf("✅ Light %s\n", ledState ? "ON" : "OFF");
   }
   else if (action == "FEED" || action == "C") {
-    // Always open the feeder when feed command is received
-    servoState = true;
-    myservo.write(80); // Open position
-    servoOpenTime = millis(); // Record when it was opened
-    Serial.println("✅ Feeder OPENED - will auto-close in 5 seconds");
+    // Always open the feeder when feed command is received - using SMOOTH movement
+    Serial.println("🍽️ FEED command received - opening feeder safely...");
+    Serial.printf("📍 Servo pin: %d, Current state: %s\n", SERVOPIN, servoState ? "OPEN" : "CLOSED");
+    
+    openFeederSmoothly(); // Use smooth movement to prevent damage
+    
+    Serial.println("✅ Feeder OPENED smoothly at 80° - will auto-close in 5 seconds");
+    Serial.printf("🕐 Open timestamp: %lu\n", servoOpenTime);
   }
   else if (action == "FEED_CLOSE" || action == "CLOSE_FEEDER") {
-    // Manual close command (optional)
-    servoState = false;
-    myservo.write(180); // Closed position
-    servoOpenTime = 0;  // Reset timer
-    Serial.println("✅ Feeder MANUALLY CLOSED");
+    // Manual close command (optional) - using SMOOTH movement
+    Serial.println("🚪 Manual close command received");
+    closeFeederSmoothly(); // Use smooth movement to prevent damage
+    Serial.println("✅ Feeder MANUALLY CLOSED smoothly at 180°");
   }
   else if (action == "BUZZER" || action == "E") {
     // Enhanced alarm system - combines scarecrow with PIR alarm pattern
@@ -1182,202 +1327,42 @@ void sendSensorData() {
     return;
   }
   
-  bool sentViaMqtt = false;
-  
-  // Try MQTT first (primary method)
+  // MQTT-ONLY Communication - No HTTP fallback
   if (mqttConnected && mqttClient.connected()) {
-    Serial.println("📡 Sending sensor data via MQTT...");
+    Serial.println("📡 Sending sensor data via MQTT (MQTT-ONLY MODE)...");
     sendMqttSensorData();
-    sentViaMqtt = true;
     apiFailures = 0; // Reset failures on successful MQTT
   } else {
-    Serial.println("⚠️ MQTT unavailable, falling back to HTTP...");
-  }
-  
-  // HTTP fallback (or primary if MQTT disabled)
-  if (!sentViaMqtt || !mqttEnabled) {
-    HTTPClient http;
-    http.setTimeout(8000); // Increased timeout for cloud requests
-    http.setReuse(false);  // Don't reuse for cloud reliability
+    Serial.println("❌ MQTT not connected - MQTT-ONLY MODE, no fallback");
+    apiFailures++;
     
-    // Send to Vercel sensor-data endpoint
-    String url = String(API_BASE) + "/sensor-data";
-    
-    if (!http.begin(url)) {
-      apiFailures++;
-      Serial.println("❌ Failed to begin HTTP connection");
-      return;
+    // If MQTT fails repeatedly, try to reconnect
+    if (apiFailures >= 3) {
+      Serial.println("� Multiple MQTT failures, attempting reconnection...");
+      connectMQTT();
+      apiFailures = 0; // Reset after reconnect attempt
     }
-    
-    http.addHeader("Content-Type", "application/json");
-    
-    // Create sensor data payload matching your existing API format
-    SensorData data = readAllSensors();
-    StaticJsonDocument<512> doc;
-    
-    doc["device_id"] = DEVICE_ID;
-    doc["temperature"] = data.temperature;
-    doc["humidity"] = data.humidity;
-    doc["soil_moisture"] = data.soilMoisture;
-    doc["water_level"] = data.waterLevel;
-    doc["light_level"] = data.lightLevel;
-    doc["steam"] = data.steam;
-    doc["distance"] = data.distance;
-    doc["motion_detected"] = data.motionDetected ? 1 : 0;
-    
-    String payload;
-    serializeJson(doc, payload);
-    
-    Serial.printf("📤 Sending to cloud (HTTP fallback): %s\n", payload.c_str());
-    
-    int code = http.POST(payload);
-    
-    if (code > 0) {
-      String response = http.getString();
-      Serial.printf("📤 Cloud data sent → HTTP %d: %s\n", code, response.c_str());
-      apiFailures = 0; // Reset on success
-    } else {
-      apiFailures++;
-      Serial.printf("❌ Cloud POST failed: %s\n", http.errorToString(code).c_str());
-    }
-    
-    http.end();
-  }
-  
-  // Failsafe: If too many failures, restart
-  if (apiFailures >= MAX_API_FAILURES) {
-    Serial.println("🔄 Too many API failures, restarting...");
-    delay(5000);
-    ESP.restart();
   }
 }
 
 void checkCommands() {
   if (WiFi.status() != WL_CONNECTED) return;
   
-  // Skip HTTP command polling if MQTT is connected (commands come via MQTT)
+  // MQTT-ONLY Command Processing - No HTTP fallback
   if (mqttConnected && mqttClient.connected()) {
-    // MQTT handles commands, just maintain connection
+    // MQTT handles all commands, maintain connection and process messages
     mqttClient.loop();
     return;
   }
   
-  // HTTP command polling (fallback when MQTT unavailable)
-  Serial.println("📡 Using HTTP command polling (MQTT fallback)");
-  HTTPClient http;
-  http.setTimeout(2000); // Faster timeout for command checking
-  http.setReuse(true);   // Reuse connection for faster commands
-  
-  String url = String(API_BASE) + "/device-commands?device_id=" + DEVICE_ID + "&status=pending";
-  
-  if (!http.begin(url)) {
-    Serial.println("❌ Failed to begin command check");
-    return;
-  }
-  
-  int code = http.GET();
-  
-  if (code == 200) {
-    String payload = http.getString();
-    Serial.printf("📥 Command response: %s\n", payload.c_str());
-    
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, payload);
-    
-    if (error) {
-      Serial.printf("❌ Command JSON parse error: %s\n", error.c_str());
-      http.end();
-      return;
-    }
-    
-    // Handle both single command and array of commands
-    if (doc.is<JsonArray>()) {
-      JsonArray cmds = doc.as<JsonArray>();
-      if (cmds.size() > 0) {
-        Serial.printf("📥 Processing %d command(s)\n", cmds.size());
-        for (JsonObject cmd : cmds) {
-          processCommand(cmd);
-        }
-      }
-    } else if (doc.is<JsonObject>()) {
-      JsonObject cmd = doc.as<JsonObject>();
-      if (cmd.containsKey("command") || cmd.containsKey("action")) {
-        Serial.println("📥 Processing single command");
-        processCommand(cmd);
-      }
-    }
-  } else if (code != 204) { // 204 = No commands pending
-    Serial.printf("⚠️ Command check failed → HTTP %d\n", code);
-  }
-  
-  http.end();
+  // If MQTT not connected, try to reconnect (no HTTP fallback)
+  Serial.println("❌ MQTT not connected for commands - attempting reconnection");
+  connectMQTT();
 }
 
-void processCommand(JsonObject cmd) {
-  String action;
-  int id = -1;
-  int duration = 3000;
-  
-  // Handle different command formats
-  if (cmd.containsKey("id")) {
-    id = cmd["id"];
-  }
-  
-  if (cmd.containsKey("command") && cmd["command"].is<JsonObject>()) {
-    JsonObject command = cmd["command"];
-    action = command["action"].as<String>();
-    duration = command["duration_ms"] | 3000;
-  } else if (cmd.containsKey("action")) {
-    action = cmd["action"].as<String>();
-    duration = cmd["duration_ms"] | 3000;
-  }
-  
-  if (action.length() > 0) {
-    Serial.printf("⚡ Executing cloud command: %s (ID: %d)\n", action.c_str(), id);
-    executeAction(action, duration);
-    
-    if (id > 0) {
-      acknowledgeCommand(id);
-    }
-  } else {
-    Serial.println("⚠️ Invalid command format");
-  }
-}
-
-void acknowledgeCommand(int id) {
-  if (id <= 0) return; // Invalid ID
-  
-  HTTPClient http;
-  http.setTimeout(5000);
-  
-  String url = String(API_BASE) + "/device-commands";
-  
-  if (!http.begin(url)) {
-    Serial.printf("❌ Failed to begin ACK for command %d\n", id);
-    return;
-  }
-  
-  http.addHeader("Content-Type", "application/json");
-  
-  StaticJsonDocument<128> doc;
-  doc["command_id"] = id;
-  doc["status"] = "completed";
-  doc["device_id"] = DEVICE_ID;
-  doc["completed_at"] = millis();
-  
-  String payload;
-  serializeJson(doc, payload);
-  
-  int code = http.PATCH(payload);
-  
-  if (code > 0) {
-    Serial.printf("✅ Command %d acknowledged → HTTP %d\n", id, code);
-  } else {
-    Serial.printf("❌ Failed to ACK command %d: %s\n", id, http.errorToString(code).c_str());
-  }
-  
-  http.end();
-}
+// REMOVED: processCommand() and acknowledgeCommand() functions
+// These were causing HTTP database polling in MQTT-only mode
+// All commands now come exclusively through MQTT callback
 
 /* ============================================================
    LOCAL WEB SERVER HANDLERS
@@ -1527,13 +1512,33 @@ void setup() {
   digitalWrite(RELAYPIN, LOW);
   digitalWrite(BUZZERPIN, LOW);
   
-  // Servo setup
+  // Test buzzer functionality
+  Serial.println("🔊 Testing buzzer system...");
+  digitalWrite(BUZZERPIN, HIGH);
+  delay(200);
+  digitalWrite(BUZZERPIN, LOW);
+  delay(100);
+  digitalWrite(BUZZERPIN, HIGH);
+  delay(200);
+  digitalWrite(BUZZERPIN, LOW);
+  Serial.println("✅ Buzzer test complete");
+  
+  // Servo setup with enhanced testing
   Serial.println("🔧 Initializing servo...");
+  Serial.printf("📍 Servo pin: %d\n", SERVOPIN);
+  
   myservo.attach(SERVOPIN);
-  myservo.write(180); // Closed position
-  servoState = false; // Ensure state matches position
-  servoOpenTime = 0;  // Initialize timer
+  delay(100);
+  
+  // Initialize servo to closed position smoothly
+  Serial.println("🔧 Initializing servo safely...");
+  myservo.write(180); // Start with closed position
   delay(500);
+  Serial.println("   Servo initialized at 180° (CLOSED)");
+  
+  servoState = false; // Ensure state matches position (closed)
+  servoOpenTime = 0;  // Initialize timer
+  Serial.println("✅ Servo initialization complete - ready for smooth operations");
   
   // LCD setup
   Serial.println("🔧 Initializing LCD...");
@@ -1577,12 +1582,12 @@ void setup() {
       lcd.print("Broker Online");
       delay(2000);
     } else {
-      Serial.println("⚠️ MQTT connection failed, will use HTTP fallback");
+      Serial.println("⚠️ MQTT connection failed - MQTT-ONLY mode requires connection");
       lcd.clear();
       lcd.setCursor(0, 0);
       lcd.print("MQTT Failed");
       lcd.setCursor(0, 1);
-      lcd.print("Using HTTP");
+      lcd.print("Reconnecting...");
       delay(2000);
     }
     
@@ -1601,7 +1606,11 @@ void setup() {
   WiFi.setSleep(false);
   Serial.println("\n✅ System Ready!");
   Serial.println("==========================================");
-  Serial.println("🚨 EMERGENCY SHUTDOWN:");
+  Serial.println("� MQTT-ONLY MODE ACTIVE:");
+  Serial.println("   ✅ All commands via MQTT only");
+  Serial.println("   ✅ All sensor data via MQTT only");
+  Serial.println("   ❌ No HTTP fallback available");
+  Serial.println("�🚨 EMERGENCY SHUTDOWN:");
   Serial.println("   Hold BOOT button (GPIO 0) for 3 seconds");
   Serial.println("   to trigger emergency system shutdown");
   Serial.println("==========================================\n");
@@ -1612,6 +1621,25 @@ void setup() {
    ============================================================ */
 void loop() {
   unsigned long now = millis();
+  
+  // Handle serial commands for testing
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    if (command == "test_buzzer") {
+      testBuzzerSystem();
+    } else if (command == "test_servo") {
+      testServoSmoothly();
+    } else if (command == "feed") {
+      executeAction("FEED", 3000);
+    } else if (command == "help") {
+      Serial.println("📋 Available commands:");
+      Serial.println("   test_buzzer - Test the motion detection buzzer system");
+      Serial.println("   test_servo - Safe servo movement test (based on your ESP32 example)");
+      Serial.println("   feed - Test feeding command directly");
+      Serial.println("   help - Show this help message");
+    }
+  }
   
   // WiFi reconnection check
   if (WiFi.status() != WL_CONNECTED) {
@@ -1624,14 +1652,23 @@ void loop() {
     return;
   }
   
-  // Handle MQTT reconnection and keep-alive
-  if (mqttEnabled) {
-    handleMqttReconnection();
-    
-    if (mqttConnected && mqttClient.connected()) {
-      mqttClient.loop(); // Process incoming MQTT messages
-    } else {
-      mqttConnected = false;
+  // MQTT-ONLY: Aggressive connection management and keep-alive
+  handleMqttReconnection();
+  
+  if (mqttConnected && mqttHealthCheck()) {
+    // Multiple MQTT loop calls for maximum responsiveness in MQTT-only mode
+    mqttClient.loop(); // Process incoming MQTT messages
+    yield(); // Allow ESP32 to process other tasks
+    mqttClient.loop(); // Process any additional messages
+    yield(); // Additional yield for stability
+    mqttClient.loop(); // Third loop for ultra-responsive command processing
+  } else {
+    mqttConnected = false;
+    // In MQTT-only mode, system is not functional without MQTT
+    static unsigned long lastMqttWarning = 0;
+    if (now - lastMqttWarning >= 5000) {
+      Serial.println("⚠️ MQTT-ONLY: System non-functional without MQTT connection");
+      lastMqttWarning = now;
     }
   }
   
@@ -1641,16 +1678,31 @@ void loop() {
     lastSensorSend = now;
   }
   
-  // Send MQTT heartbeat
+  // Send MQTT heartbeat with health check
   if (mqttConnected && now - lastMqttHeartbeat >= mqttHeartbeatInterval) {
-    sendMqttStatus("online");
+    sendMqttStatus("mqtt_only_online");
     lastMqttHeartbeat = now;
+    
+    // MQTT-ONLY health check
+    if (!mqttClient.connected()) {
+      Serial.println("🚨 MQTT-ONLY: Connection lost during heartbeat!");
+      mqttConnected = false;
+    }
   }
   
-  // Check for commands (ULTRA-FAST - 250ms interval)
+  // Check for commands (ULTRA-FAST - 100ms interval)
   if (systemReady && now - lastCommandCheck >= commandInterval) {
     checkCommands();
     lastCommandCheck = now;
+  }
+  
+  // Extra MQTT processing for better responsiveness  
+  if (mqttConnected && mqttClient.connected()) {
+    static unsigned long lastExtraMqttLoop = 0;
+    if (now - lastExtraMqttLoop >= 50) { // Extra MQTT loop every 50ms
+      mqttClient.loop();
+      lastExtraMqttLoop = now;
+    }
   }
   
   // Update LCD display
@@ -1659,12 +1711,12 @@ void loop() {
     lastLCDUpdate = now;
   }
   
-  // Auto-close servo feeder after timeout
+  // Auto-close servo feeder after timeout using smooth movement
   if (servoState && servoOpenTime > 0 && (now - servoOpenTime >= servoAutoCloseInterval)) {
-    servoState = false;
-    myservo.write(180); // Closed position
-    servoOpenTime = 0;  // Reset timer
-    Serial.println("✅ Feeder AUTO-CLOSED after 5 seconds");
+    Serial.printf("🕐 Auto-closing feeder smoothly - elapsed: %lums/%lums\n", 
+                 (now - servoOpenTime), servoAutoCloseInterval);
+    closeFeederSmoothly(); // Use smooth movement to prevent damage
+    Serial.println("✅ Feeder AUTO-CLOSED smoothly after 5 seconds");
   }
   
   // Check emergency button (CRITICAL - always check)

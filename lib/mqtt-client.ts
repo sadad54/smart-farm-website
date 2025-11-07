@@ -199,18 +199,48 @@ class SmartFarmMQTTClient {
     console.log('✅ Command completed:', data)
     
     try {
-      const { error } = await supabaseAdmin
+      // First try to find the command by MQTT command ID (preferred method)
+      let { data: command, error: fetchError } = await supabaseAdmin
+        .from('device_commands')
+        .select('*')
+        .eq('mqtt_command_id', data.command_id)
+        .eq('device_id', data.device_id || 'farm_001')
+        .single()
+
+      // If not found by MQTT ID, fall back to finding recent pending command
+      if (fetchError || !command) {
+        console.log('⚠️ Command not found by MQTT ID, trying fallback method...')
+        
+        const { data: commands, error: fallbackError } = await supabaseAdmin
+          .from('device_commands')
+          .select('*')
+          .eq('device_id', data.device_id || 'farm_001')
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false })
+          .limit(1)
+
+        if (fallbackError || !commands || commands.length === 0) {
+          console.log('⚠️ No pending commands found to update')
+          return
+        }
+        
+        command = commands[0]
+      }
+      
+      // Update the found command
+      const { error: updateError } = await supabaseAdmin
         .from('device_commands')
         .update({
           status: data.status,
-          completed_at: new Date(data.completed_at)
+          completed_at: new Date(data.completed_at || Date.now()),
+          updated_at: new Date()
         })
-        .eq('id', data.command_id)
+        .eq('id', command.id)
 
-      if (!error) {
-        console.log(`✅ Command ${data.command_id} marked as completed`)
+      if (!updateError) {
+        console.log(`✅ Database command ${command.id} marked as ${data.status} (MQTT ID: ${data.command_id})`)
       } else {
-        console.error('❌ Error updating command status:', error)
+        console.error('❌ Error updating command status:', updateError)
       }
     } catch (error) {
       console.error('❌ Error updating command status:', error)
@@ -273,6 +303,11 @@ class SmartFarmMQTTClient {
 
   // Send command to ESP32
   public sendCommand(action: string, duration: number = 3000): string | null {
+    return this.sendCommandWithId(action, duration, Date.now().toString())
+  }
+
+  // Send command to ESP32 with specific command ID
+  public sendCommandWithId(action: string, duration: number = 3000, commandId: string): string | null {
     if (!this.connected || !this.client) {
       console.error('❌ Cannot send command - MQTT not connected')
       return null
@@ -281,7 +316,7 @@ class SmartFarmMQTTClient {
     const command = {
       action: action.toUpperCase(),
       duration_ms: duration,
-      command_id: Date.now().toString(),
+      command_id: commandId,
       timestamp: Date.now(),
       source: 'dashboard'
     }
