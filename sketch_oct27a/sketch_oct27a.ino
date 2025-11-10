@@ -487,13 +487,31 @@ void openFeedingBox() {
   
   isFeeding = true;
   Serial.println("🍽️ Opening feeding box...");
-  Serial.printf("📍 Current servo position: %d°\n", pos);
+  
+  // Attach servo only when needed
+  myservo.attach(SERVOPIN);
+  
+  // Add timeout protection
+  unsigned long startTime = millis();
+  const unsigned long TIMEOUT = 5000; // 5 second timeout
   
   // Servo movement: 180 to 80 degrees (opening - sliding door opens by moving down)
   for (pos = 180; pos >= 80; pos -= 1) {
     myservo.write(pos);
     delay(15);
+    
+    // Check for timeout
+    if (millis() - startTime > TIMEOUT) {
+      Serial.println("⚠️ Opening operation timed out!");
+      break;
+    }
   }
+  
+  // Small delay to let servo reach position
+  delay(100);
+  
+  // Detach servo after movement
+  myservo.detach();
   
   feedingBoxOpen = true;
   isFeeding = false;
@@ -509,13 +527,31 @@ void closeFeedingBox() {
   
   isFeeding = true;
   Serial.println("🚪 Closing feeding box...");
-  Serial.printf("📍 Current servo position: %d°\n", pos);
+  
+  // Attach servo only when needed
+  myservo.attach(SERVOPIN);
+  
+  // Add timeout protection
+  unsigned long startTime = millis();
+  const unsigned long TIMEOUT = 5000; // 5 second timeout
   
   // Servo movement: 80 to 180 degrees (closing - sliding door closes by moving up)
   for (pos = 80; pos <= 180; pos += 1) {
     myservo.write(pos);
     delay(15);
+    
+    // Check for timeout
+    if (millis() - startTime > TIMEOUT) {
+      Serial.println("⚠️ Closing operation timed out!");
+      break;
+    }
   }
+  
+  // Small delay to let servo reach position
+  delay(100);
+  
+  // Detach servo after movement
+  myservo.detach();
   
   feedingBoxOpen = false;
   isFeeding = false;
