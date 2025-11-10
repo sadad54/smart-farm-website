@@ -3,17 +3,18 @@ import { supabaseAdmin } from '@/lib/supabase'
 
 // MQTT Configuration - HiveMQ Cloud (Updated with new credentials)
 const MQTT_CONFIG = {
-  broker: 'wss://4dcaf2b87d5c4e18925c6939161d4a72.s1.eu.hivemq.cloud:8884/mqtt',
+  // ⚠️ CRITICAL: EMQX Serverless requires the /mqtt path
+  broker: 'wss://mc91e0db.ala.asia-southeast1.emqxsl.com:8084/mqtt' ,
   options: {
     clientId: 'SmartFarm_Dashboard_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-    clean: true,            // Clean session for web clients (required with dynamic clientId)
-    reconnectPeriod: 2000,  // Faster reconnection attempts
-    keepalive: 30,          // More frequent keepalive
-    connectTimeout: 10000,  // Shorter timeout for faster failure detection
-    qos: 1,                // Ensure at-least-once delivery
-    reschedulePings: true, // Ensure connection stays alive
-    username: 'hivemq.webclient.1762484723853',
-    password: 'Bg$c.@6pA:yhGQdC2H79',
+    username: 'smartfarm-dashboard',
+    password: 'ams54$ADAD',
+    clean: true,
+    reconnectPeriod: 2000,
+    keepalive: 30,
+    connectTimeout: 10000,
+    qos: 1,
+    reschedulePings: true,
     protocol: 'wss' as const,
     rejectUnauthorized: false,
     will: {
