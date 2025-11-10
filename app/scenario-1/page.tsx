@@ -116,12 +116,20 @@ export default function Scenario1Page() {
   }, [animalDetected])
 
   const handleFeed = async () => {
+    console.log('🍽️ handleFeed() called - Starting feeding process...')
+    console.log(`📊 State: mode=${feedingMode}, cooldown=${feedingCooldown}, connected=${connected}, initialized=${systemInitialized}`)
+    
     if (feedingCooldown) {
       console.log('⚠️ Feeding blocked - cooldown active')
+      alert('⏰ Please wait - Feeding cooldown active (10 seconds between feeds)')
       return // Prevent rapid feeding
     }
     
-    console.log('🍽️ handleFeed() called - Starting feeding process...')
+    if (!connected) {
+      console.log('⚠️ Feeding blocked - ESP32 not connected')
+      alert('❌ ESP32 not connected! Please check your device connection.')
+      return
+    }
     
     try {
       console.log('📤 Sending command "C" to ESP32...')
@@ -167,13 +175,39 @@ export default function Scenario1Page() {
     }
   }
 
-  const initializeSystem = () => {
+  const initializeSystem = async () => {
     setSystemInitialized(true)
     console.log('🚀 Scenario 1: Intelligent Feeding System Initialized')
+    
+    // Ensure auto-feeding is OFF by default for safety
+    try {
+      console.log('🔒 Setting auto-feeding to MANUAL mode by default...')
+      await sendCommand('AUTO_OFF')
+      setFeedingMode('manual')
+      console.log('✅ System initialized in MANUAL mode - toggle to AUTO when ready')
+    } catch (error) {
+      console.error('❌ Failed to initialize feeding mode:', error)
+    }
   }
 
-  const toggleFeedingMode = () => {
-    setFeedingMode(prev => prev === 'auto' ? 'manual' : 'auto')
+  const toggleFeedingMode = async () => {
+    const newMode = feedingMode === 'auto' ? 'manual' : 'auto'
+    setFeedingMode(newMode)
+    
+    // Send MQTT command to enable/disable auto-feeding on ESP32
+    try {
+      if (newMode === 'auto') {
+        console.log('🤖 Enabling auto-feeding mode on ESP32...')
+        await sendCommand('AUTO_ON')
+        console.log('✅ Auto-feeding enabled - ESP32 will automatically feed when animals detected within 7cm')
+      } else {
+        console.log('🤖 Disabling auto-feeding mode on ESP32...')
+        await sendCommand('AUTO_OFF')
+        console.log('✅ Auto-feeding disabled - Manual control only')
+      }
+    } catch (error) {
+      console.error('❌ Failed to toggle feeding mode:', error)
+    }
   }
 
   return (
@@ -245,18 +279,25 @@ export default function Scenario1Page() {
             
             <div className="bg-white/80 rounded-2xl p-6 space-y-4">
               {/* Mode Toggle */}
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-gray-800">Feeding Mode:</span>
-                <button
-                  onClick={toggleFeedingMode}
-                  className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
-                    feedingMode === 'auto' 
-                      ? 'bg-green-500 text-white' 
-                      : 'bg-gray-300 text-gray-700'
-                  }`}
-                >
-                  {feedingMode === 'auto' ? 'AUTO' : 'MANUAL'}
-                </button>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-gray-800">Feeding Mode:</span>
+                  <button
+                    onClick={toggleFeedingMode}
+                    className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                      feedingMode === 'auto' 
+                        ? 'bg-green-500 text-white' 
+                        : 'bg-gray-300 text-gray-700'
+                    }`}
+                  >
+                    {feedingMode === 'auto' ? '🤖 AUTO' : '👆 MANUAL'}
+                  </button>
+                </div>
+                <p className="text-xs text-gray-600 italic">
+                  {feedingMode === 'auto' 
+                    ? '⚠️ ESP32 will automatically open door when animal within 7cm' 
+                    : '✅ Door only opens via manual button press'}
+                </p>
               </div>
 
               {/* Distance Display - Real ESP32 data */}
@@ -301,15 +342,27 @@ export default function Scenario1Page() {
               {/* Manual Feed Button */}
               <button
                 onClick={handleFeed}
-                disabled={feedingMode === 'auto' && !animalDetected}
+                disabled={feedingCooldown || (feedingMode === 'auto' && !animalDetected)}
                 className={`w-full py-3 rounded-lg font-bold text-white transition-all ${
-                  feedingMode === 'auto' && !animalDetected
+                  feedingCooldown || (feedingMode === 'auto' && !animalDetected)
                     ? 'bg-gray-400 cursor-not-allowed'
                     : 'bg-orange-500 hover:bg-orange-600 hover:scale-105'
                 }`}
               >
-                {feedingMode === 'auto' ? 'AUTO FEEDING ACTIVE' : 'FEED NOW'}
+                {feedingCooldown 
+                  ? 'COOLDOWN (10s)...' 
+                  : feedingMode === 'auto' 
+                    ? 'AUTO FEEDING ACTIVE' 
+                    : 'FEED NOW'}
               </button>
+              
+              {/* Debug info */}
+              {process.env.NODE_ENV === 'development' && (
+                <div className="text-xs text-gray-500 space-y-1">
+                  <p>Mode: {feedingMode} | Cooldown: {feedingCooldown ? 'YES' : 'NO'}</p>
+                  <p>Connected: {connected ? 'YES' : 'NO'} | System: {systemInitialized ? 'ON' : 'OFF'}</p>
+                </div>
+              )}
             </div>
           </Card>
 

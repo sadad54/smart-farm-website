@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
     console.log(`🎯 Smart command: ${action} for ${device_id}`)
 
     // Validate action (accept both long names and single letters)
-    const validActions = ['LIGHT', 'FAN', 'FEED', 'WATER', 'BUZZER', 'PIR_ALARM', 'A', 'B', 'C', 'D', 'E', 'P']
+    const validActions = ['LIGHT', 'FAN', 'FEED', 'WATER', 'BUZZER', 'PIR_ALARM', 'AUTO_ON', 'AUTO_OFF', 'A', 'B', 'C', 'D', 'E', 'P']
     const upperAction = action?.toString().toUpperCase()
     
     if (!validActions.includes(upperAction)) {

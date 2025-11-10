@@ -25,8 +25,8 @@ export default function MotionSensorCard() {
   const [lastAlertSound, setLastAlertSound] = useState<number>(0)
   
   // Simplified alert system state to match ESP32
-  const [intruderAlert, setIntruderAlert] = useState(false)
-  const [alertMessage, setAlertMessage] = useState("")
+  const [intruderAlert, setIntruderAlert] = useState<boolean>(false)
+  const [alertMessage, setAlertMessage] = useState<string>("")
   const [distance, setDistance] = useState<number>(999)
 
   // Force update when ESP state changes

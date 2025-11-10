@@ -4,16 +4,18 @@ import { supabaseAdmin } from '@/lib/supabase'
 // MQTT Configuration - HiveMQ Cloud (Updated with new credentials)
 const MQTT_CONFIG = {
   broker: 'wss://4dcaf2b87d5c4e18925c6939161d4a72.s1.eu.hivemq.cloud:8884/mqtt',
-  clientId: 'SmartFarm_Dashboard_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
   options: {
-    keepalive: 60,
-    reconnectPeriod: 5000,      // Increased reconnect delay
-    connectTimeout: 30 * 1000,
-    username: 'hivemq.webclient.1762484723853',     // ✅ UPDATED - New HiveMQ Cloud username
-    password: 'Bg$c.@6pA:yhGQdC2H79',               // ✅ UPDATED - New HiveMQ Cloud password
+    clientId: 'SmartFarm_Dashboard_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+    clean: true,            // Clean session for web clients (required with dynamic clientId)
+    reconnectPeriod: 2000,  // Faster reconnection attempts
+    keepalive: 30,          // More frequent keepalive
+    connectTimeout: 10000,  // Shorter timeout for faster failure detection
+    qos: 1,                // Ensure at-least-once delivery
+    reschedulePings: true, // Ensure connection stays alive
+    username: 'hivemq.webclient.1762484723853',
+    password: 'Bg$c.@6pA:yhGQdC2H79',
     protocol: 'wss' as const,
-    clean: true,               // Clean session for web clients
-    rejectUnauthorized: false, // Accept self-signed certificates
+    rejectUnauthorized: false,
     will: {
       topic: 'smartfarm/dashboard/status',
       payload: JSON.stringify({ status: 'offline', timestamp: Date.now() }),
@@ -74,7 +76,7 @@ class SmartFarmMQTTClient {
       console.log(`🌩️ Connecting to HiveMQ Cloud MQTT broker... (Attempt ${this.connectionAttempts}/${this.maxRetries})`)
       console.log(`📍 Broker: ${MQTT_CONFIG.broker}`)
       console.log(`👤 Username: ${MQTT_CONFIG.options.username}`)
-      console.log(`🆔 Client ID: ${MQTT_CONFIG.clientId}`)
+      console.log(`🆔 Client ID: ${MQTT_CONFIG.options.clientId}`)
       console.log(`🔧 Protocol: ${MQTT_CONFIG.options.protocol}`)
       console.log(`⏱️ Connect Timeout: ${MQTT_CONFIG.options.connectTimeout}ms`)
       
@@ -148,7 +150,7 @@ class SmartFarmMQTTClient {
 
       this.client.on('reconnect', () => {
         console.log('🔄 HiveMQ Cloud MQTT Reconnecting...')
-        console.log(`🔄 Attempt with Client ID: ${MQTT_CONFIG.clientId}`)
+        console.log(`🔄 Attempt with Client ID: ${MQTT_CONFIG.options.clientId}`)
       })
 
       this.client.on('disconnect', () => {
@@ -198,15 +200,19 @@ class SmartFarmMQTTClient {
   // Process sensor data and save to Supabase
   private async handleSensorData(data: any) {
     console.log('📊 Processing sensor data:', data)
+    
+    // Update local cache immediately
     this.lastSensorData = data
     
-    // Notify all subscribers of new sensor data
+    // Notify subscribers immediately with new data
     this.sensorDataCallbacks.forEach(callback => {
-      try {
-        callback(data)
-      } catch (error) {
-        console.error('❌ Error in sensor data callback:', error)
-      }
+      queueMicrotask(() => {
+        try {
+          callback(data)
+        } catch (error) {
+          console.error('❌ Error in sensor data callback:', error)
+        }
+      })
     })
 
     try {
@@ -415,7 +421,7 @@ class SmartFarmMQTTClient {
       const statusMsg = {
         status: status,
         timestamp: Date.now(),
-        client_id: MQTT_CONFIG.clientId
+        client_id: MQTT_CONFIG.options.clientId
       }
 
       this.client.publish('smartfarm/dashboard/status', JSON.stringify(statusMsg), { retain: true })

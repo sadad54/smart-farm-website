@@ -10,7 +10,7 @@ export async function POST(request: NextRequest) {
     console.log(`⚡ MQTT Command request: "${action}" (type: ${typeof action}) (${duration_ms}ms) for device ${device_id}`)
 
     // Validate action (accept both long names and single letters)
-    const validActions = ['LIGHT', 'FAN', 'FEED', 'WATER', 'BUZZER', 'PIR_ALARM', 'A', 'B', 'C', 'D', 'E', 'P']
+    const validActions = ['LIGHT', 'FAN', 'FEED', 'WATER', 'BUZZER', 'PIR_ALARM', 'AUTO_ON', 'AUTO_OFF', 'A', 'B', 'C', 'D', 'E', 'P']
     const upperAction = action?.toString().toUpperCase()
     console.log(`🔍 Action validation: "${action}" -> "${upperAction}" (valid: ${validActions.includes(upperAction)})`)
     

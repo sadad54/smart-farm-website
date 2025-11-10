@@ -1,6 +1,7 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useState, useEffect, useRef } from 'react'
+import { flushSync } from 'react-dom'
 
 export type EspState = {
   temperature?: number | null
@@ -32,9 +33,15 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
       if (!mounted) return
 
       try {
+        const abortController = new AbortController()
+        const timeoutId = setTimeout(() => abortController.abort(), 3000) // 3s timeout
+
         const response = await fetch('/api/mqtt-sensor-data', {
-          cache: "no-store"
+          cache: "no-store",
+          signal: abortController.signal
         })
+        
+        clearTimeout(timeoutId)
         
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`)
@@ -44,8 +51,11 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
         
         if (result.data) {
           console.log('📊 Live MQTT sensor data received:', result.data)
-          setState(result.data)
-          setConnected(result.connected)
+          // Batch state updates
+          flushSync(() => {
+            setState(result.data)
+            setConnected(result.connected)
+          })
         } else {
           console.log('⚠️ No MQTT sensor data available')
           setConnected(result.connected || false)
