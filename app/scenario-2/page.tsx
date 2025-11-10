@@ -40,7 +40,7 @@ const defaultRules: EnvironmentalRule[] = [
     id: "temp_control",
     name: "Temperature Control",
     description: "Auto fan activation when too hot",
-    conditions: { temperature: { max: 28 } },
+    conditions: { temperature: { min: 28 } },
     actions: { fan: true },
     enabled: true,
     priority: 1
@@ -49,7 +49,7 @@ const defaultRules: EnvironmentalRule[] = [
     id: "drought_protection",
     name: "Drought Protection",
     description: "Auto watering when soil is dry",
-    conditions: { soilMoisture: { max: 30 } },
+    conditions: { soilMoisture: { min: 30 } },
     actions: { watering: true },
     enabled: true,
     priority: 2
@@ -58,7 +58,7 @@ const defaultRules: EnvironmentalRule[] = [
     id: "night_lighting",
     name: "Night Lighting",
     description: "LED lighting when dark",
-    conditions: { lightLevel: { max: 20 } },
+    conditions: { lightLevel: { min: 20 } },
     actions: { led: true },
     enabled: true,
     priority: 3
@@ -67,7 +67,7 @@ const defaultRules: EnvironmentalRule[] = [
     id: "intruder_alert",
     name: "Intruder Alert (Ultrasonic)",
     description: "Buzzer when something is too close",
-    conditions: { distance: { max: 10 } },  // Alert when distance is less than 10cm
+    conditions: { distance: { min: 2 } },  // Alert when distance is less than 10cm
     actions: { buzzer: true },
     enabled: true,
     priority: 4
@@ -86,7 +86,7 @@ const defaultRules: EnvironmentalRule[] = [
     name: "Emergency Protocol",
     description: "Full system alert for extreme conditions",
     conditions: { 
-      temperature: { max: 35 },
+      temperature: { min: 35 },
       humidity: { min: 80 }
     },
     actions: { fan: true, buzzer: true, led: true },
@@ -127,40 +127,28 @@ export default function Scenario2Page() {
         // Check temperature conditions
         if (conditions.temperature) {
           if (conditions.temperature.min && (state.temperature ?? 0) < conditions.temperature.min) {
-            conditionsMet = false
-          }
-          if (conditions.temperature.max && (state.temperature ?? 0) > conditions.temperature.max) {
-            conditionsMet = false
+            conditionsMet = true
           }
         }
 
         // Check humidity conditions
         if (conditions.humidity) {
           if (conditions.humidity.min && (state.humidity ?? 0) < conditions.humidity.min) {
-            conditionsMet = false
-          }
-          if (conditions.humidity.max && (state.humidity ?? 0) > conditions.humidity.max) {
-            conditionsMet = false
+            conditionsMet = true
           }
         }
 
         // Check soil moisture conditions
         if (conditions.soilMoisture) {
           if (conditions.soilMoisture.min && (state.soilHumidity ?? 0) < conditions.soilMoisture.min) {
-            conditionsMet = false
-          }
-          if (conditions.soilMoisture.max && (state.soilHumidity ?? 0) > conditions.soilMoisture.max) {
-            conditionsMet = false
+            conditionsMet = true
           }
         }
 
         // Check light level conditions
         if (conditions.lightLevel) {
           if (conditions.lightLevel.min && (state.light ?? 0) < conditions.lightLevel.min) {
-            conditionsMet = false
-          }
-          if (conditions.lightLevel.max && (state.light ?? 0) > conditions.lightLevel.max) {
-            conditionsMet = false
+            conditionsMet = true
           }
         }
 
@@ -168,13 +156,10 @@ export default function Scenario2Page() {
         if (conditions.distance) {
           const currentDistance = state.distance ?? 0
           if (rule.id === 'intruder_alert') {
-            console.log(`🔍 Intruder Alert Check - Distance: ${currentDistance}cm, Min: ${conditions.distance.min}, Max: ${conditions.distance.max}`)
+            console.log(`🔍 Intruder Alert Check - Distance: ${currentDistance}cm, Min: ${conditions.distance.min}`)
           }
           if (conditions.distance.min && currentDistance < conditions.distance.min) {
-            conditionsMet = false
-          }
-          if (conditions.distance.max && currentDistance > conditions.distance.max) {
-            conditionsMet = false
+            conditionsMet = true
           }
         }
 
