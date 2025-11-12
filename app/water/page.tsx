@@ -472,10 +472,10 @@ export default function WaterPage() {
               <div className="bg-gradient-to-b from-blue-100 to-blue-300 rounded-2xl p-8 relative overflow-hidden h-64">
                 <div 
                   className={`absolute bottom-0 left-0 right-0 rounded-t-[50px] transition-all duration-500 ${
-                    (state.waterLevel ?? 61) < 20 ? 'bg-red-500' : 
-                    (state.waterLevel ?? 61) < 50 ? 'bg-yellow-500' : 'bg-blue-500'
+                    (state.waterLevel ?? 0) < 20 ? 'bg-red-500' : 
+                    (state.waterLevel ?? 0) < 50 ? 'bg-yellow-500' : 'bg-blue-500'
                   }`}
-                  style={{ height: `${Math.max(5, state.waterLevel ?? 61)}%` }}
+                  style={{ height: `${Math.max(5, state.waterLevel ?? 0)}%` }}
                 >
                   <svg className="absolute top-0 left-0 right-0" viewBox="0 0 1200 100" preserveAspectRatio="none">
                     <path
@@ -489,31 +489,31 @@ export default function WaterPage() {
                 {/* Tank Info */}
                 <div className="absolute top-4 left-4 text-blue-900">
                   <p className="text-sm font-semibold">Capacity: {waterTankData?.capacity_liters || 100}L</p>
-                  <p className="text-xs opacity-75">Est. {Math.max(1, Math.floor((((state.waterLevel ?? 61) / 100) * (waterTankData?.capacity_liters || 100)) / 10))} days remaining</p>
+                  <p className="text-xs opacity-75">Est. {Math.max(1, Math.floor((((state.waterLevel ?? 0) / 100) * (waterTankData?.capacity_liters || 100)) / 10))} days remaining</p>
                 </div>
                 
                 {/* Level Display */}
                 <div className="absolute bottom-8 right-8 text-blue-900 font-bold text-2xl">
-                  {(state.waterLevel ?? 61).toFixed(1)}% Full
+                  {(state.waterLevel ?? 0).toFixed(1)}% Full
                 </div>
                 
                 {/* Current Liters */}
                 <div className="absolute bottom-8 left-8 text-blue-900">
-                  <p className="text-lg font-bold">{(((state.waterLevel ?? 61) / 100) * (waterTankData?.capacity_liters || 100)).toFixed(1)}L</p>
+                  <p className="text-lg font-bold">{(((state.waterLevel ?? 0) / 100) * (waterTankData?.capacity_liters || 100)).toFixed(1)}L</p>
                   <p className="text-xs opacity-75">Current Volume</p>
                 </div>
                 
                 {/* Status Indicator */}
                 <div className={`absolute top-4 right-4 px-3 py-1 rounded-full text-xs font-bold ${
-                  (state.waterLevel ?? 61) < 20 ? 'bg-red-100 text-red-800' :
-                  (state.waterLevel ?? 61) < 50 ? 'bg-yellow-100 text-yellow-800' :
+                  (state.waterLevel ?? 0) < 20 ? 'bg-red-100 text-red-800' :
+                  (state.waterLevel ?? 0) < 50 ? 'bg-yellow-100 text-yellow-800' :
                   'bg-green-100 text-green-800'
                 }`}>
-                  {(state.waterLevel ?? 61) < 20 ? 'LOW' : (state.waterLevel ?? 61) < 50 ? 'MEDIUM' : 'FULL'}
+                  {(state.waterLevel ?? 0) < 20 ? 'LOW' : (state.waterLevel ?? 0) < 50 ? 'MEDIUM' : 'FULL'}
                 </div>
 
                 {/* Low Level Warning */}
-                {(state.waterLevel ?? 61) < 20 && (
+                {(state.waterLevel ?? 0) < 20 && (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <div className="bg-red-500/90 text-white px-4 py-2 rounded-xl animate-pulse font-bold">
                       ⚠️ LOW WATER LEVEL!
