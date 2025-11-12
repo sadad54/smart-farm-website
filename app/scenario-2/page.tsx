@@ -82,13 +82,19 @@ const defaultRules: EnvironmentalRule[] = [
     priority: 3
   },
   {
-    id: "emergency_protocol",
-    name: "Emergency Protocol",
-    description: "Full system alert for extreme conditions",
-    conditions: { 
-      temperature: { min: 35 },
-      humidity: { min: 80 }
-    },
+    id: "emergency_temp_high",
+    name: "Emergency: High Temperature",
+    description: "Emergency protocol when temperature is extremely high",
+    conditions: { temperature: { max: 35 } },
+    actions: { fan: true, buzzer: true, led: true },
+    enabled: true,
+    priority: 0
+  },
+  {
+    id: "emergency_humidity_high",
+    name: "Emergency: High Humidity",
+    description: "Emergency protocol when humidity is extremely high",
+    conditions: { humidity: { max: 80 } },
     actions: { fan: true, buzzer: true, led: true },
     enabled: true,
     priority: 0
@@ -124,42 +130,80 @@ export default function Scenario2Page() {
         const conditions = rule.conditions
         let conditionsMet = true
 
-        // Check temperature conditions
+        // Check numeric conditions (min = trigger when reading < min, max = trigger when reading > max)
         if (conditions.temperature) {
-          if (conditions.temperature.min && (state.temperature ?? 0) < conditions.temperature.min) {
-            conditionsMet = true
+          const temp = state.temperature ?? 0
+          if (conditions.temperature.min !== undefined) {
+            // min: condition satisfied when temp < min
+            if (!(temp < conditions.temperature.min)) {
+              conditionsMet = false
+            }
+          }
+          if (conditions.temperature.max !== undefined) {
+            // max: condition satisfied when temp > max
+            if (!(temp > conditions.temperature.max)) {
+              conditionsMet = false
+            }
           }
         }
 
-        // Check humidity conditions
         if (conditions.humidity) {
-          if (conditions.humidity.min && (state.humidity ?? 0) < conditions.humidity.min) {
-            conditionsMet = true
+          const hum = state.humidity ?? 0
+          if (conditions.humidity.min !== undefined) {
+            if (!(hum < conditions.humidity.min)) {
+              conditionsMet = false
+            }
+          }
+          if (conditions.humidity.max !== undefined) {
+            if (!(hum > conditions.humidity.max)) {
+              conditionsMet = false
+            }
           }
         }
 
-        // Check soil moisture conditions
         if (conditions.soilMoisture) {
-          if (conditions.soilMoisture.min && (state.soilHumidity ?? 0) < conditions.soilMoisture.min) {
-            conditionsMet = true
+          const soil = state.soilHumidity ?? 0
+          if (conditions.soilMoisture.min !== undefined) {
+            if (!(soil < conditions.soilMoisture.min)) {
+              conditionsMet = false
+            }
+          }
+          if (conditions.soilMoisture.max !== undefined) {
+            if (!(soil > conditions.soilMoisture.max)) {
+              conditionsMet = false
+            }
           }
         }
 
-        // Check light level conditions
         if (conditions.lightLevel) {
-          if (conditions.lightLevel.min && (state.light ?? 0) < conditions.lightLevel.min) {
-            conditionsMet = true
+          const light = state.light ?? 0
+          if (conditions.lightLevel.min !== undefined) {
+            if (!(light < conditions.lightLevel.min)) {
+              conditionsMet = false
+            }
+          }
+          if (conditions.lightLevel.max !== undefined) {
+            if (!(light > conditions.lightLevel.max)) {
+              conditionsMet = false
+            }
           }
         }
 
-        // Check distance conditions
+        // Check distance conditions (min = trigger when distance < min, max = trigger when distance > max)
         if (conditions.distance) {
           const currentDistance = state.distance ?? 0
           if (rule.id === 'intruder_alert') {
-            console.log(`🔍 Intruder Alert Check - Distance: ${currentDistance}cm, Min: ${conditions.distance.min}`)
+            console.log(`🔍 Intruder Alert Check - Distance: ${currentDistance}cm, Min: ${conditions.distance.min}, Max: ${conditions.distance.max}`)
           }
-          if (conditions.distance.min && currentDistance < conditions.distance.min) {
-            conditionsMet = true
+          if (conditions.distance.min !== undefined) {
+            if (!(currentDistance < conditions.distance.min)) {
+              conditionsMet = false
+            }
+          }
+          if (conditions.distance.max !== undefined) {
+            if (!(currentDistance > conditions.distance.max)) {
+              conditionsMet = false
+            }
           }
         }
 
