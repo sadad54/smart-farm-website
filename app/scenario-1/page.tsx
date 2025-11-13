@@ -21,6 +21,7 @@ export default function Scenario1Page() {
   const [distance, setDistance] = useState<number>(0)
   const [motionEvents, setMotionEvents] = useState<any[]>([])
   const [feedingCooldown, setFeedingCooldown] = useState(false)
+  const [forceRefresh, setForceRefresh] = useState(0) // Force re-renders
   const prevLight = useRef<number | null>(null)
   const detectionCooldownRef = useRef<number>(0)
 
@@ -32,6 +33,12 @@ export default function Scenario1Page() {
     if (state.distance !== undefined && state.distance !== null && state.distance !== -1) {
       const currentDistance = state.distance
       setDistance(currentDistance) // Update local state for UI display
+      
+      // Console log for debugging UI updates
+      console.log(`📏 Distance update: ${currentDistance.toFixed(1)}cm - UI should update now`)
+      
+      // Force UI refresh when distance changes
+      setForceRefresh(prev => prev + 1)
       
       // Only detect if enough time has passed since last detection
       const now = Date.now()
@@ -66,6 +73,17 @@ export default function Scenario1Page() {
       }
     }
   }, [state.distance, animalDetected, feedingMode, feedingCooldown, systemInitialized])
+
+  // Force UI updates when ESP32 state changes (more aggressive)
+  useEffect(() => {
+    console.log('🔄 ESP32 state changed - forcing UI update:', {
+      distance: state.distance,
+      connected,
+      temperature: state.temperature,
+      timestamp: new Date().toLocaleTimeString()
+    })
+    setForceRefresh(prev => prev + 1)
+  }, [state.distance, state.temperature, state.humidity, state.light, state.motionDetected, connected])
 
   // Method 2: Fetch real motion events from database (only when system is initialized)
   useEffect(() => {
@@ -361,16 +379,38 @@ export default function Scenario1Page() {
                 <div className="text-xs text-gray-500 space-y-1">
                   <p>Mode: {feedingMode} | Cooldown: {feedingCooldown ? 'YES' : 'NO'}</p>
                   <p>Connected: {connected ? 'YES' : 'NO'} | System: {systemInitialized ? 'ON' : 'OFF'}</p>
+                  <p>Distance: {state.distance !== undefined && state.distance !== null ? `${state.distance.toFixed(1)}cm` : 'No Data'} | Animal: {animalDetected ? 'YES' : 'NO'}</p>
                 </div>
               )}
             </div>
           </Card>
 
           {/* System Status Card */}
-          <Card className="bg-blue-200/90 backdrop-blur-sm rounded-3xl p-6 border-4 border-blue-400">
-            <h3 className={`${poppins.className} text-2xl font-bold text-blue-900 mb-4`}>
-              System Status
-            </h3>
+          <Card 
+            key={`system-status-${state.distance || 0}-${connected}-${animalDetected}-${feedingCooldown}-${forceRefresh}`}
+            className="bg-blue-200/90 backdrop-blur-sm rounded-3xl p-6 border-4 border-blue-400"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className={`${poppins.className} text-2xl font-bold text-blue-900`}>
+                System Status
+              </h3>
+              {/* Live Update Indicator */}
+              <div className="flex flex-col items-end gap-1">
+                <div className="flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${
+                    connected && state.distance !== undefined ? 'bg-green-400 animate-pulse' : 'bg-gray-400'
+                  }`} />
+                  <span className={`text-xs font-semibold ${
+                    connected && state.distance !== undefined ? 'text-green-600' : 'text-gray-500'
+                  }`}>
+                    {connected && state.distance !== undefined ? 'LIVE' : 'OFFLINE'}
+                  </span>
+                </div>
+                <div className="text-xs text-gray-500">
+                  Updated: {new Date().toLocaleTimeString()}
+                </div>
+              </div>
+            </div>
             
             <div className="bg-white/80 rounded-2xl p-6 space-y-4">
               {/* Connection Status */}
@@ -405,11 +445,12 @@ export default function Scenario1Page() {
               </div>
 
               {/* Detection Range - Updated to use real ESP32 ultrasonic data */}
-              <div className="mt-4">
+              <div className="mt-4" key={`detection-range-${state.distance || 0}-${forceRefresh}`}>
                 <span className="font-semibold text-gray-800">Detection Range: 2-7 cm (Very Close Approach)</span>
                 <div className="mt-2 w-full bg-gray-200 rounded-full h-4">
                   <div 
-                    className={`h-4 rounded-full transition-all duration-500 ${
+                    key={`progress-bar-${state.distance || 0}-${forceRefresh}`}
+                    className={`h-4 rounded-full transition-all duration-300 ${
                       // Color based on real distance from ESP32 sensor
                       state.distance !== undefined && state.distance !== null && state.distance !== -1
                         ? (state.distance >= 2 && state.distance <= 7 ? 'bg-red-500 animate-pulse' : 'bg-blue-500')

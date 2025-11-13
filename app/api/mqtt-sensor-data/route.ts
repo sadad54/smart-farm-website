@@ -7,6 +7,10 @@ export async function GET() {
     const latestData = smartFarmMQTT.getLastSensorData()
     const isConnected = smartFarmMQTT.isConnected()
     
+    // Debug logging to see what data structure we're getting
+    console.log('🔍 MQTT API Debug - Connection:', isConnected)
+    console.log('🔍 MQTT API Debug - Raw Data:', JSON.stringify(latestData, null, 2))
+    
     if (!isConnected) {
       return NextResponse.json({
         connected: false,
@@ -25,22 +29,32 @@ export async function GET() {
       })
     }
     
-    // Convert MQTT data format to dashboard format
+    // Convert MQTT data format to dashboard format - handle multiple ESP32 formats
     const sensorData = {
-      temperature: latestData.temp || null,
-      humidity: latestData.hum || null,
-      soilHumidity: latestData.soil || null,
-      waterLevel: latestData.water || null,
-      light: latestData.light || null,
-      distance: latestData.distance || null,
-      // Expose servo state if device includes it in MQTT sensor payload
-      servo: typeof latestData.servo !== 'undefined' ? latestData.servo : null,
-      motionDetected: latestData.motion === 1,
-      intruderAlert: latestData.intruder_alert === 1,
+      // Handle both direct properties and readings array format
+      temperature: latestData.temp || latestData.temperature || 
+        (latestData.readings && latestData.readings.find((r: any) => r.metric === 'temperature')?.value) || null,
+      humidity: latestData.hum || latestData.humidity ||
+        (latestData.readings && latestData.readings.find((r: any) => r.metric === 'humidity')?.value) || null,
+      soilHumidity: latestData.soil || latestData.soilHumidity ||
+        (latestData.readings && latestData.readings.find((r: any) => r.metric === 'soilHumidity')?.value) || null,
+      waterLevel: latestData.water || latestData.waterLevel ||
+        (latestData.readings && latestData.readings.find((r: any) => r.metric === 'waterLevel')?.value) || null,
+      light: latestData.light || latestData.lightLevel ||
+        (latestData.readings && latestData.readings.find((r: any) => r.metric === 'light')?.value) || null,
+      distance: latestData.distance || latestData.dist ||
+        (latestData.readings && latestData.readings.find((r: any) => r.metric === 'distance')?.value) || null,
+      // Motion detection - handle various formats
+      motionDetected: latestData.motion === 1 || latestData.motion === true || latestData.pir === 1,
+      intruderAlert: latestData.intruder_alert === 1 || latestData.alarm === 1,
       alertLevel: latestData.alert_level || 0,
-      timestamp: latestData.timestamp,
-      raw: "mqtt-only-live"
+      // Servo state
+      servo: typeof latestData.servo !== 'undefined' ? latestData.servo : null,
+      timestamp: latestData.timestamp || new Date().toISOString(),
+      raw: JSON.stringify(latestData) // Include raw data for debugging
     }
+    
+    console.log('🔄 MQTT API Debug - Converted Data:', JSON.stringify(sensorData, null, 2))
     
     return NextResponse.json({
       connected: isConnected,

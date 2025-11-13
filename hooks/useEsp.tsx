@@ -51,11 +51,13 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
         
         if (result.data) {
           console.log('📊 Live MQTT sensor data received:', result.data)
+          console.log('🔄 Distance value:', result.data.distance, 'Motion:', result.data.motionDetected)
           // Batch state updates
           flushSync(() => {
             setState(result.data)
             setConnected(result.connected)
           })
+          console.log('✅ State updated in useEsp hook')
         } else {
           console.log('⚠️ No MQTT sensor data available')
           setConnected(result.connected || false)
@@ -70,8 +72,8 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
     // Initial poll immediately  
     pollMqttData()
     
-    // Set up fast polling for real-time updates (every 2 seconds)
-    const pollInterval = setInterval(pollMqttData, 2000)
+    // Set up fast polling for real-time updates (every 1 second for responsive UI)
+    const pollInterval = setInterval(pollMqttData, 1000)
 
     return () => {
       mounted = false

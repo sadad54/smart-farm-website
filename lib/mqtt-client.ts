@@ -200,10 +200,16 @@ class SmartFarmMQTTClient {
 
   // Process sensor data and save to Supabase
   private async handleSensorData(data: any) {
-    console.log('📊 Processing sensor data:', data)
+    console.log('📊 Processing sensor data:', JSON.stringify(data, null, 2))
+    console.log('🔍 Data structure keys:', Object.keys(data))
     
-    // Update local cache immediately
-    this.lastSensorData = data
+    // Update local cache immediately with timestamp
+    this.lastSensorData = {
+      ...data,
+      lastUpdated: new Date().toISOString(),
+      receivedAt: Date.now()
+    }
+    console.log('✅ Updated lastSensorData cache at', new Date().toLocaleTimeString())
     
     // Notify subscribers immediately with new data
     this.sensorDataCallbacks.forEach(callback => {
