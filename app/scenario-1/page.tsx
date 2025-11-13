@@ -472,12 +472,9 @@ export default function Scenario1Page() {
                       ? (state.distance >= 2 && state.distance <= 7 ? 'bg-red-100 text-red-700 animate-pulse' : 'bg-blue-100 text-blue-700')
                       : 'bg-gray-100 text-gray-500'
                   }`}>
-                    {(() => {
-                      console.log(`🎯 System Status Card - Distance: ${state.distance}, Mode: ${feedingMode}, Connected: ${connected}, Force Refresh: ${forceRefresh}`)
-                      return state.distance !== undefined && state.distance !== null && state.distance !== -1 
-                        ? `${state.distance.toFixed(1)} cm` 
-                        : 'No Signal'
-                    })()}
+                    {state.distance !== undefined && state.distance !== null && state.distance !== -1 
+                      ? `${state.distance.toFixed(1)} cm` 
+                      : 'No Signal'}
                   </div>
                 </div>
                 <div className="mt-2 w-full bg-gray-200 rounded-full h-6 relative">
