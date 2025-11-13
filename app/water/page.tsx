@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { useEspContext } from "@/components/EspProvider"
 import { supabase } from "@/lib/supabase"
 import { PredictiveWateringAssistant } from "@/components/PredictiveWateringAssistant"
+import { useMQTTScheduling } from "@/hooks/useMQTTScheduling"
 import { Poppins } from "next/font/google"
 import { Calendar, Trash2, Edit, Play, Clock } from 'lucide-react'
 
@@ -41,32 +42,36 @@ interface WaterTankData {
   note?: string
 }
 
-interface WateringSchedule {
-  id: number
-  name: string
-  plant_type: string
-  water_amount_ml: number
-  duration_ms: number
-  schedule_type: 'once' | 'daily' | 'weekly' | 'custom'
-  scheduled_time: string
-  scheduled_days: number[] | null
-  start_date: string
-  end_date: string | null
-  is_active: boolean
-  next_execution: string | null
-  execution_count: number
-  created_at: string
-}
 
 export default function WaterPage() {
   const { sendCommand, state, connected } = useEspContext()
   const [wateringHistory, setWateringHistory] = useState<WateringRecord[]>([])
   const [waterTankData, setWaterTankData] = useState<WaterTankData | null>(null)
-  const [schedules, setSchedules] = useState<WateringSchedule[]>([])
+
   const [loading, setLoading] = useState(true)
   const [showScheduleModal, setShowScheduleModal] = useState(false)
-  const [editingSchedule, setEditingSchedule] = useState<WateringSchedule | null>(null)
+
+
+  // MQTT-based scheduling system
+  const { schedules: mqttSchedules, addSchedule, removeSchedule } = useMQTTScheduling()
   
+  // Timezone conversion helper functions
+  const convertUtcToLocalTime = (utcTimeString: string) => {
+    // Simple timezone fix: Subtract 8 hours from UTC to show local time
+    const [hours, minutes] = utcTimeString.split(':').map(Number)
+    const localHours = (hours - 8 + 24) % 24 // Add 24 to handle negative hours
+    
+    return `${localHours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`
+  }
+
+  const convertUtcToLocalForForm = (utcTimeString: string) => {
+    // Simple timezone fix: Subtract 8 hours from UTC for form editing
+    const [hours, minutes] = utcTimeString.split(':').map(Number)
+    const localHours = (hours - 8 + 24) % 24 // Add 24 to handle negative hours
+    
+    return `${localHours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`
+  }
+
   // Schedule form state with smart defaults
   const [scheduleForm, setScheduleForm] = useState({
     name: '',
@@ -107,200 +112,47 @@ export default function WaterPage() {
     }
   }
 
-  // Fetch watering schedules
-  const fetchSchedules = async () => {
-    try {
-      const response = await fetch('/api/watering-schedules')
-      const result = await response.json()
-      if (result.success) {
-        setSchedules(result.data)
-      }
-    } catch (error) {
-      console.error('Failed to fetch schedules:', error)
-    }
+  // No need to fetch schedules from database - using MQTT schedules
+  const loadMQTTSchedules = () => {
+    // Schedules are automatically loaded by the useMQTTScheduling hook
+    console.log('📋 MQTT schedules loaded:', mqttSchedules)
   }
 
 
 
-  // Save schedule with validation and auto-configuration
-  const saveSchedule = async () => {
+  // Save MQTT schedule (simplified - no database)
+  const saveSchedule = () => {
     // Basic validation
     if (!scheduleForm.name.trim()) {
       alert('Please enter a schedule name')
       return
     }
-    
-    if (scheduleForm.schedule_type === 'weekly' && scheduleForm.scheduled_days.length === 0) {
-      alert('Please select at least one day for weekly schedules')
-      return
-    }
-
-    // Validate date format for one-time schedules
-    if (scheduleForm.schedule_type === 'once') {
-      const selectedDate = new Date(scheduleForm.start_date)
-      const today = new Date()
-      today.setHours(0, 0, 0, 0) // Reset time to compare dates only
-      
-      if (isNaN(selectedDate.getTime())) {
-        alert('Please select a valid date')
-        return
-      }
-      
-      if (selectedDate < today) {
-        alert('Please select a future date')
-        return
-      }
-    }
 
     try {
       setLoading(true)
-      const method = editingSchedule ? 'PUT' : 'POST'
-      const url = '/api/watering-schedules'
       
-      // Auto-configure all the settings the user doesn't need to worry about
-      // Convert frontend weekday format (0=Sunday) to database format (1=Monday, 7=Sunday)
-      const convertedDays = scheduleForm.scheduled_days.map(day => {
-        // Frontend: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat  
-        // Database: 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat, 7=Sun
-        return day === 0 ? 7 : day; // Convert Sunday from 0 to 7, others stay the same
-      }).sort()
-
-      const scheduleData = {
-        ...(editingSchedule && { id: editingSchedule.id }), // Include ID for updates
-        device_id: 'farm_001',
-        name: scheduleForm.name.trim(),
-        plant_type: scheduleForm.plant_type || 'General',
-        water_amount_ml: scheduleForm.water_amount_ml || 250,
-        duration_ms: scheduleForm.duration_ms || 5000,
-        schedule_type: scheduleForm.schedule_type,
-        scheduled_time: scheduleForm.scheduled_time,
-        scheduled_days: scheduleForm.schedule_type === 'weekly' ? convertedDays : null,
-        start_date: scheduleForm.start_date || new Date().toISOString().split('T')[0],
-        end_date: scheduleForm.end_date && scheduleForm.end_date.trim() ? scheduleForm.end_date : null,
-        is_active: true,
-        timezone: 'UTC'
-      }
+      console.log(`📅 Creating MQTT schedule: ${scheduleForm.name} at ${scheduleForm.scheduled_time}`)
       
-      console.log(`📤 ${editingSchedule ? 'Updating' : 'Creating'} schedule:`, scheduleData)
+      // Add the schedule using MQTT scheduling
+      addSchedule(
+        scheduleForm.name.trim(),
+        scheduleForm.scheduled_time, // Use local time directly
+        scheduleForm.duration_ms || 5000
+      )
       
-      const response = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(scheduleData)
-      })
+      console.log(`✅ MQTT schedule created successfully!`)
+      setShowScheduleModal(false)
+      resetForm()
       
-      const result = await response.json()
-      console.log(`📥 API Response:`, result)
-      
-      if (response.ok && result.success) {
-        setShowScheduleModal(false)
-        setEditingSchedule(null)
-        resetForm()
-        fetchSchedules()
-        
-        // Show success message
-        console.log(`✅ Schedule ${editingSchedule ? 'updated' : 'created'} successfully!`)
-      } else {
-        console.error('Failed to save schedule:', result.error)
-        alert(`Failed to ${editingSchedule ? 'update' : 'create'} schedule: ` + (result.error || 'Unknown error'))
-      }
     } catch (error) {
-      console.error('Failed to save schedule:', error)
-      alert('Failed to save schedule. Please try again.')
+      console.error('Error creating MQTT schedule:', error)
+      alert('Failed to create schedule. Please try again.')
     } finally {
       setLoading(false)
     }
   }
 
-  // Delete schedule with confirmation
-  const deleteSchedule = async (id: number) => {
-    const schedule = schedules.find(s => s.id === id)
-    if (!schedule) return
 
-    if (!confirm(`Are you sure you want to delete "${schedule.name}"? This action cannot be undone.`)) {
-      return
-    }
-
-    try {
-      setLoading(true)
-      const response = await fetch(`/api/watering-schedules?id=${id}`, {
-        method: 'DELETE'
-      })
-      
-      const result = await response.json()
-      
-      if (response.ok && result.success) {
-        console.log(`🗑️ Schedule "${schedule.name}" deleted successfully`)
-        fetchSchedules()
-      } else {
-        console.error('Failed to delete schedule:', result.error)
-        alert('Failed to delete schedule: ' + (result.error || 'Unknown error'))
-      }
-    } catch (error) {
-      console.error('Failed to delete schedule:', error)
-      alert('Failed to delete schedule. Please try again.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // Execute schedule manually
-  const executeSchedule = async (id: number) => {
-    try {
-      setLoading(true)
-      
-      // Find the schedule to execute
-      const schedule = schedules.find(s => s.id === id)
-      if (!schedule) {
-        alert('Schedule not found')
-        return
-      }
-
-      console.log(`🔄 Executing schedule: ${schedule.name}`)
-      
-      // Execute the watering command via ESP32
-      await sendCommand('D', 'schedule_execution', {
-        schedule_id: id,
-        plant_type: schedule.plant_type,
-        water_amount_ml: schedule.water_amount_ml,
-        duration_ms: schedule.duration_ms
-      })
-
-      // Log the watering event
-      await fetch('/api/watering', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          device_id: 'farm_001',
-          duration_ms: schedule.duration_ms,
-          water_amount_ml: schedule.water_amount_ml,
-          plant_type: schedule.plant_type,
-          triggered_by: 'manual_schedule'
-        })
-      })
-
-      // Update schedule execution count
-      await fetch('/api/watering-schedules/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ schedule_id: id })
-      })
-      
-      console.log(`✅ Schedule "${schedule.name}" executed successfully!`)
-      
-      // Refresh data
-      setTimeout(() => {
-        fetchWateringHistory()
-        fetchSchedules()
-      }, 1000)
-      
-    } catch (error) {
-      console.error('Failed to execute schedule:', error)
-      alert('Failed to execute schedule. Please try again.')
-    } finally {
-      setLoading(false)
-    }
-  }
 
   // Reset form with smart defaults
   const resetForm = () => {
@@ -318,31 +170,7 @@ export default function WaterPage() {
     })
   }
 
-  // Edit schedule
-  const editSchedule = (schedule: WateringSchedule) => {
-    setEditingSchedule(schedule)
-    
-    // Convert database weekday format (1=Mon, 7=Sun) back to frontend format (0=Sun, 1=Mon)
-    const convertedDays = (schedule.scheduled_days || []).map(day => {
-      // Database: 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat, 7=Sun
-      // Frontend: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
-      return day === 7 ? 0 : day; // Convert Sunday from 7 to 0, others stay the same
-    }).sort()
-    
-    setScheduleForm({
-      name: schedule.name,
-      plant_type: schedule.plant_type,
-      water_amount_ml: schedule.water_amount_ml,
-      duration_ms: schedule.duration_ms,
-      schedule_type: schedule.schedule_type,
-      scheduled_time: schedule.scheduled_time,
-      scheduled_days: convertedDays,
-      start_date: schedule.start_date,
-      end_date: schedule.end_date || '',
-      is_active: schedule.is_active
-    })
-    setShowScheduleModal(true)
-  }
+
 
   // Handle watering command
   const handleWatering = async (command: string, plantType: string = 'crops') => {
@@ -375,7 +203,7 @@ export default function WaterPage() {
   useEffect(() => {
     fetchWateringHistory()
     fetchWaterTankData()
-    fetchSchedules()
+    loadMQTTSchedules()
     setLoading(false)
 
     // Real-time subscription for watering history
@@ -586,7 +414,13 @@ export default function WaterPage() {
             {/* Watering Schedules Card */}
             <Card className="bg-green-200/90 backdrop-blur-sm rounded-3xl p-6 border-4 border-green-400">
               <div className="flex justify-between items-center mb-4">
-                <h3 className={`${poppins.className} text-2xl font-bold text-green-900`}>Scheduled Watering</h3>
+                <div className="flex items-center gap-3">
+                  <h3 className={`${poppins.className} text-2xl font-bold text-green-900`}>Scheduled Watering</h3>
+                  <div className="flex items-center gap-1 bg-green-600 text-white px-2 py-1 rounded-full text-xs">
+                    <div className="w-2 h-2 bg-green-300 rounded-full animate-pulse"></div>
+                    Auto-Scheduler Active
+                  </div>
+                </div>
                 <div className="flex gap-2">
                   <Button 
                     onClick={() => handleWatering('D', 'quick_water')}
@@ -607,52 +441,42 @@ export default function WaterPage() {
                 </div>
               </div>
               <div className="space-y-3 max-h-60 overflow-y-auto">
-                {schedules.length === 0 ? (
+                {mqttSchedules.length === 0 ? (
                   <div className="text-center py-6">
                     <p className="text-green-700 mb-3">No schedules created yet</p>
                     <p className="text-sm text-green-600">Click "Schedule" to create your first automated watering schedule</p>
                   </div>
                 ) : (
-                  schedules.map((schedule) => (
+                  mqttSchedules.map((schedule) => (
                     <div key={schedule.id} className="bg-white/70 rounded-xl p-4 hover:bg-white/80 transition-colors">
                       <div className="flex justify-between items-start">
                         <div className="flex-1">
                           <div className="flex items-center gap-2 mb-2">
                             <h4 className="font-semibold text-green-900">{schedule.name}</h4>
                             <Badge 
-                              variant={schedule.is_active ? "default" : "secondary"}
-                              className={schedule.is_active ? "bg-green-500" : "bg-gray-400"}
+                              variant={schedule.active ? "default" : "secondary"}
+                              className={schedule.active ? "bg-green-500" : "bg-gray-400"}
                             >
-                              {schedule.is_active ? "Active" : "Inactive"}
+                              {schedule.active ? "Active" : "Inactive"}
                             </Badge>
                           </div>
                           <p className="text-sm text-green-700 mb-1">
-                            <span className="font-medium">{schedule.plant_type}</span> • 
-                            <span className="mx-1">{schedule.water_amount_ml}ml</span> • 
-                            <span className="capitalize">{schedule.schedule_type}</span>
+                            <span className="font-medium">MQTT Schedule</span> • 
+                            <span className="mx-1">{(schedule.waterDuration / 1000).toFixed(1)}s duration</span>
                           </p>
                           <div className="flex items-center gap-4 mt-2 text-xs text-green-600">
                             <span className="flex items-center gap-1">
                               <Clock className="w-3 h-3" />
-                              {schedule.scheduled_time}
+                              {schedule.time}
+                              <span className="text-xs text-green-500 ml-1">(Local)</span>
                             </span>
-                            {schedule.schedule_type === 'weekly' && schedule.scheduled_days && (
-                              <span>
-                                Days: {schedule.scheduled_days.map(d => {
-                                  // Convert database format (1=Mon, 7=Sun) back to display names
-                                  const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-                                  return d === 7 ? 'Sun' : dayNames[d - 1]
-                                }).join(', ')}
-                              </span>
-                            )}
-                            <span>Executed: {schedule.execution_count} times</span>
                           </div>
                         </div>
                         <div className="flex gap-1">
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => executeSchedule(schedule.id)}
+                            onClick={() => handleWatering('D', 'scheduled')}
                             className="h-8 w-8 p-0 hover:bg-green-100"
                             title="Run now"
                             disabled={loading}
@@ -662,16 +486,7 @@ export default function WaterPage() {
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => editSchedule(schedule)}
-                            className="h-8 w-8 p-0 hover:bg-blue-100"
-                            title="Edit"
-                          >
-                            <Edit className="w-3 h-3" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => deleteSchedule(schedule.id)}
+                            onClick={() => removeSchedule(schedule.id)}
                             className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-100"
                             title="Delete"
                             disabled={loading}
@@ -794,7 +609,7 @@ export default function WaterPage() {
 
               {/* Time */}
               <div>
-                <Label htmlFor="time">What time?</Label>
+                <Label htmlFor="time">What time? <span className="text-sm text-gray-500">(Your local time)</span></Label>
                 <Input
                   id="time"
                   type="time"
@@ -802,6 +617,9 @@ export default function WaterPage() {
                   onChange={(e) => setScheduleForm({...scheduleForm, scheduled_time: e.target.value})}
                   className="mt-1"
                 />
+                <p className="text-xs text-gray-500 mt-1">
+                  Time zone: {Intl.DateTimeFormat().resolvedOptions().timeZone}
+                </p>
               </div>
 
               {/* Auto-configured notice */}
@@ -823,7 +641,6 @@ export default function WaterPage() {
                 variant="outline" 
                 onClick={() => {
                   setShowScheduleModal(false)
-                  setEditingSchedule(null)
                   resetForm()
                 }}
                 disabled={loading}
@@ -837,8 +654,8 @@ export default function WaterPage() {
                 className="bg-green-600 hover:bg-green-700"
               >
                 {loading 
-                  ? (editingSchedule ? 'Updating...' : 'Creating...') 
-                  : (editingSchedule ? '✏️ Update Schedule' : '💧 Create Schedule')
+                  ? 'Creating...' 
+                  : '💧 Create Schedule'
                 }
               </Button>
             </div>

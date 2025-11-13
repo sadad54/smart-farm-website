@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import smartFarmMQTT from '@/lib/mqtt-client'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -24,13 +25,62 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
     
+    // Debug: Show what schedules are being checked
+    console.log(`🔍 Checking ${pendingSchedules?.length || 0} pending schedules at ${now}`)
+    pendingSchedules?.forEach(s => {
+      console.log(`📋 Schedule "${s.name}": next_execution=${s.next_execution}, scheduled_time=${s.scheduled_time}`)
+    })
+
     const executionResults = []
     
     for (const schedule of pendingSchedules || []) {
       try {
-        // Execute the watering command (this would normally trigger ESP32)
-        // For now, we'll log it and simulate execution
-        console.log(`Executing schedule: ${schedule.name} for ${schedule.plant_type}`)
+        // Execute the watering command by sending MQTT command to ESP32
+        console.log(`🌱 Executing scheduled watering: ${schedule.name} for ${schedule.plant_type}`)
+        
+        // Send watering command via MQTT (with proper error handling)
+        let commandId = null
+        try {
+          // Make sure MQTT is properly initialized before sending command
+          if (smartFarmMQTT && typeof smartFarmMQTT.sendCommand === 'function') {
+            commandId = smartFarmMQTT.sendCommand('D', schedule.duration_ms)
+            console.log(`💧 Watering command sent to ESP32, Command ID: ${commandId}`)
+          } else {
+            console.log(`💧 MQTT not available, simulating watering command 'D' with duration ${schedule.duration_ms}ms`)
+          }
+        } catch (mqttError) {
+          console.error('❌ MQTT command failed:', mqttError)
+          console.log(`💧 Fallback: Simulating watering command 'D' with duration ${schedule.duration_ms}ms`)
+        }
+        
+        // Log to watering history table (with timeout and error handling)
+        try {
+          const controller = new AbortController()
+          const timeoutId = setTimeout(() => controller.abort(), 5000) // 5 second timeout
+          
+          const wateringResponse = await fetch(`http://localhost:3000/api/watering`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              device_id: schedule.device_id,
+              duration_ms: schedule.duration_ms,
+              water_amount_ml: schedule.water_amount_ml,
+              plant_type: schedule.plant_type,
+              triggered_by: 'automatic_schedule',
+              schedule_id: schedule.id
+            }),
+            signal: controller.signal
+          })
+          clearTimeout(timeoutId)
+          
+          if (!wateringResponse.ok) {
+            console.error('❌ Failed to log watering event:', wateringResponse.statusText)
+          } else {
+            console.log('✅ Watering event logged to history')
+          }
+        } catch (wateringLogError) {
+          console.error('❌ Error logging watering event:', wateringLogError)
+        }
         
         // Log the execution
         const { error: logError } = await supabase
@@ -133,9 +183,10 @@ export async function POST(request: NextRequest) {
     }
     
     try {
-      // Here you would normally send command to ESP32
-      // For now, we'll simulate the execution
-      console.log(`Manually executing schedule: ${schedule.name}`)
+      // Send watering command to ESP32 via MQTT
+      console.log(`🔧 Manually executing schedule: ${schedule.name}`)
+      const commandId = smartFarmMQTT.sendCommand('D', schedule.duration_ms)
+      console.log(`💧 Manual watering command sent to ESP32, Command ID: ${commandId}`)
       
       // Log the execution
       const { error: logError } = await supabase

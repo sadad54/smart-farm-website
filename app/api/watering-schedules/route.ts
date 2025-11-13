@@ -92,6 +92,25 @@ export async function POST(request: NextRequest) {
       console.error('Error creating schedule:', error)
       return NextResponse.json({ success: false, error: error.message }, { status: 500 })
     }
+
+    // MANUAL FIX: Override next_execution to use scheduled_time directly as UTC
+    if (schedule) {
+      const today = new Date().toISOString().split('T')[0]
+      const correctNextExecution = `${today}T${scheduled_time}Z` // Use scheduled_time as UTC directly
+      
+      console.log(`🔧 Fixing next_execution: ${schedule.next_execution} → ${correctNextExecution}`)
+      
+      const { error: updateError } = await supabase
+        .from('watering_schedules')
+        .update({ next_execution: correctNextExecution })
+        .eq('id', schedule.id)
+        
+      if (updateError) {
+        console.error('Error updating next_execution:', updateError)
+      } else {
+        schedule.next_execution = correctNextExecution
+      }
+    }
     
     return NextResponse.json({
       success: true,
