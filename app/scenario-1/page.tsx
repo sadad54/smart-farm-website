@@ -27,44 +27,52 @@ export default function Scenario1Page() {
   const prevLight = useRef<number | null>(null)
   const detectionCooldownRef = useRef<number>(0)
 
-  // Real ultrasonic sensor-based animal detection (only when system is initialized)
+  // Real ultrasonic sensor-based animal detection - ALWAYS update distance display regardless of mode
   useEffect(() => {
-    if (!systemInitialized) return
+    console.log(`👀 Distance Monitor - Mode: ${feedingMode}, Connected: ${connected}, Initialized: ${systemInitialized}`)
     
-    // Use real ultrasonic sensor data from ESP32
+    // Always update distance display for System Status Card, even before initialization
     if (state.distance !== undefined && state.distance !== null && state.distance !== -1) {
       const currentDistance = state.distance
       setDistance(currentDistance) // Update local state for UI display
       
       // Console log for debugging UI updates
-      console.log(`📏 Distance update: ${currentDistance.toFixed(1)}cm - UI should update now`)
+      console.log(`📏 Distance update: ${currentDistance.toFixed(1)}cm - Mode: ${feedingMode} - UI updating now`)
       
-      // Force UI refresh when distance changes
+      // Force UI refresh when distance changes - regardless of feeding mode
       setForceRefresh(prev => prev + 1)
       
-      // Only detect if enough time has passed since last detection
-      const now = Date.now()
-      if (now - detectionCooldownRef.current > 3000) { // 3 second minimum between detections
-        
-        // Animal detection logic: Precise close range for feeding
-        // Very close range: 2-7cm indicates animal presence (realistic close approach)
-        if (currentDistance >= 2 && currentDistance <= 7) {
-          if (!animalDetected && !feedingCooldown) {
-            setAnimalDetected(true)
-            detectionCooldownRef.current = now
-            console.log(`🐕 Animal detected at ${currentDistance.toFixed(1)}cm - Triggering feeding`)
-            
-            if (feedingMode === 'auto') {
-              handleFeed()
+      // Animal detection logic only affects feeding behavior if system is initialized
+      if (systemInitialized) {
+        // Only detect if enough time has passed since last detection
+        const now = Date.now()
+        if (now - detectionCooldownRef.current > 3000) { // 3 second minimum between detections
+          
+          // Animal detection logic: Precise close range for feeding
+          // Very close range: 2-7cm indicates animal presence (realistic close approach)
+          if (currentDistance >= 2 && currentDistance <= 7) {
+            if (!animalDetected && !feedingCooldown) {
+              setAnimalDetected(true)
+              detectionCooldownRef.current = now
+              console.log(`🐕 Animal detected at ${currentDistance.toFixed(1)}cm`)
+              
+              if (feedingMode === 'auto') {
+                console.log(`🤖 Auto mode - Triggering automatic feeding`)
+                handleFeed()
+              } else {
+                console.log(`👤 Manual mode - Animal detected but no auto feeding`)
+              }
+            }
+          } else {
+            // Animal moved away or out of range
+            if (animalDetected && currentDistance > 10) {
+              setAnimalDetected(false)
+              console.log(`🚪 Animal left detection zone - Distance: ${currentDistance.toFixed(1)}cm`)
             }
           }
-        } else {
-          // Animal moved away or out of range
-          if (animalDetected && currentDistance > 10) {
-            setAnimalDetected(false)
-            console.log(`🚪 Animal left detection zone - Distance: ${currentDistance.toFixed(1)}cm`)
-          }
         }
+      } else {
+        console.log(`⚠️ System not initialized - showing distance ${currentDistance.toFixed(1)}cm but no feeding logic`)
       }
     } else {
       // No valid sensor reading - reset to safe distance and clear detection
@@ -73,8 +81,10 @@ export default function Scenario1Page() {
         setAnimalDetected(false)
         console.log('🔧 Ultrasonic sensor offline - clearing detection')
       }
+      console.log('⚠️ No distance data - showing fallback value in System Status Card')
+      setForceRefresh(prev => prev + 1) // Force refresh to show "No Signal" state
     }
-  }, [state.distance, animalDetected, feedingMode, feedingCooldown, systemInitialized])
+  }, [state.distance, animalDetected, feedingMode, feedingCooldown, systemInitialized, connected])
 
     // Force UI updates when ESP32 state changes (more aggressive)
   useEffect(() => {
@@ -462,9 +472,12 @@ export default function Scenario1Page() {
                       ? (state.distance >= 2 && state.distance <= 7 ? 'bg-red-100 text-red-700 animate-pulse' : 'bg-blue-100 text-blue-700')
                       : 'bg-gray-100 text-gray-500'
                   }`}>
-                    {state.distance !== undefined && state.distance !== null && state.distance !== -1 
-                      ? `${state.distance.toFixed(1)} cm` 
-                      : 'No Signal'}
+                    {(() => {
+                      console.log(`🎯 System Status Card - Distance: ${state.distance}, Mode: ${feedingMode}, Connected: ${connected}, Force Refresh: ${forceRefresh}`)
+                      return state.distance !== undefined && state.distance !== null && state.distance !== -1 
+                        ? `${state.distance.toFixed(1)} cm` 
+                        : 'No Signal'
+                    })()}
                   </div>
                 </div>
                 <div className="mt-2 w-full bg-gray-200 rounded-full h-6 relative">
