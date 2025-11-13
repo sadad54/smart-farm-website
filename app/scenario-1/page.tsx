@@ -22,6 +22,8 @@ export default function Scenario1Page() {
   const [motionEvents, setMotionEvents] = useState<any[]>([])
   const [feedingCooldown, setFeedingCooldown] = useState(false)
   const [forceRefresh, setForceRefresh] = useState(0) // Force re-renders
+  const [distanceChanged, setDistanceChanged] = useState(false) // Flash indicator
+  const prevDistance = useRef<number | null>(null)
   const prevLight = useRef<number | null>(null)
   const detectionCooldownRef = useRef<number>(0)
 
@@ -74,7 +76,7 @@ export default function Scenario1Page() {
     }
   }, [state.distance, animalDetected, feedingMode, feedingCooldown, systemInitialized])
 
-  // Force UI updates when ESP32 state changes (more aggressive)
+    // Force UI updates when ESP32 state changes (more aggressive)
   useEffect(() => {
     console.log('🔄 ESP32 state changed - forcing UI update:', {
       distance: state.distance,
@@ -82,10 +84,17 @@ export default function Scenario1Page() {
       temperature: state.temperature,
       timestamp: new Date().toLocaleTimeString()
     })
+    
+    // Flash indicator when distance changes
+    if (prevDistance.current !== null && prevDistance.current !== state.distance) {
+      console.log(`📏 Distance changed: ${prevDistance.current}cm → ${state.distance}cm`)
+      setDistanceChanged(true)
+      setTimeout(() => setDistanceChanged(false), 1000) // Flash for 1 second
+    }
+    prevDistance.current = state.distance
+    
     setForceRefresh(prev => prev + 1)
-  }, [state.distance, state.temperature, state.humidity, state.light, state.motionDetected, connected])
-
-  // Method 2: Fetch real motion events from database (only when system is initialized)
+  }, [state.distance, state.temperature, state.humidity, state.light, state.motionDetected, connected])  // Method 2: Fetch real motion events from database (only when system is initialized)
   useEffect(() => {
     if (!systemInitialized) return
     
@@ -446,40 +455,76 @@ export default function Scenario1Page() {
 
               {/* Detection Range - Updated to use real ESP32 ultrasonic data */}
               <div className="mt-4" key={`detection-range-${state.distance || 0}-${forceRefresh}`}>
-                <span className="font-semibold text-gray-800">Detection Range: 2-7 cm (Very Close Approach)</span>
-                <div className="mt-2 w-full bg-gray-200 rounded-full h-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-semibold text-gray-800">Detection Range: 2-7 cm</span>
+                  <div className={`px-3 py-1 rounded-lg text-sm font-bold ${
+                    state.distance !== undefined && state.distance !== null && state.distance !== -1
+                      ? (state.distance >= 2 && state.distance <= 7 ? 'bg-red-100 text-red-700 animate-pulse' : 'bg-blue-100 text-blue-700')
+                      : 'bg-gray-100 text-gray-500'
+                  }`}>
+                    {state.distance !== undefined && state.distance !== null && state.distance !== -1 
+                      ? `${state.distance.toFixed(1)} cm` 
+                      : 'No Signal'}
+                  </div>
+                </div>
+                <div className="mt-2 w-full bg-gray-200 rounded-full h-6 relative">
+                  {/* Detection zone markers */}
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-[10%] h-full bg-yellow-300/50 rounded-l-full"></div>
+                    <div className="w-[25%] h-full bg-red-300/50"></div>
+                    <div className="w-[65%] h-full bg-green-300/50 rounded-r-full"></div>
+                  </div>
                   <div 
                     key={`progress-bar-${state.distance || 0}-${forceRefresh}`}
-                    className={`h-4 rounded-full transition-all duration-300 ${
+                    className={`h-6 rounded-full transition-all duration-500 relative z-10 ${
                       // Color based on real distance from ESP32 sensor
                       state.distance !== undefined && state.distance !== null && state.distance !== -1
-                        ? (state.distance >= 2 && state.distance <= 7 ? 'bg-red-500 animate-pulse' : 'bg-blue-500')
+                        ? (state.distance >= 2 && state.distance <= 7 ? 'bg-red-600 animate-pulse shadow-lg' : 'bg-blue-600 shadow-md')
                         : 'bg-gray-400'
                     }`}
                     style={{ 
-                      // Use actual ESP32 distance data for progress bar width
+                      // More responsive width calculation: 0-15cm range for better visibility
                       width: `${state.distance !== undefined && state.distance !== null && state.distance !== -1 
-                        ? Math.min((state.distance / 20) * 100, 100) 
+                        ? Math.min(Math.max((state.distance / 15) * 100, 5), 100)  // Min 5%, max 100%
                         : 0}%` 
                     }}
-                  />
+                  >
+                    <div className="absolute inset-0 bg-white/30 rounded-full"></div>
+                  </div>
                 </div>
-                <div className="flex justify-between text-xs text-gray-500 mt-1">
-                  <span>0cm</span>
-                  <span>2cm</span>
-                  <span>7cm</span>
-                  <span>20cm+</span>
+                <div className="flex justify-between text-xs text-gray-500 mt-2">
+                  <span className="text-yellow-600">0cm</span>
+                  <span className="text-red-600 font-semibold">2cm</span>
+                  <span className="text-red-600 font-semibold">7cm</span>
+                  <span className="text-green-600">15cm+</span>
                 </div>
-                <div className="text-center mt-2">
-                  <span className={`text-sm font-bold ${
+                <div className={`text-center mt-3 p-2 rounded-lg transition-all duration-300 ${
+                  distanceChanged ? 'bg-yellow-200 border-2 border-yellow-400' : 'bg-white/50'
+                }`}>
+                  <div className="flex items-center justify-center gap-2">
+                    <div className="text-xs text-gray-600">LIVE SENSOR READING</div>
+                    {distanceChanged && <div className="w-2 h-2 bg-yellow-400 rounded-full animate-ping"></div>}
+                  </div>
+                  <div className={`text-lg font-bold transition-all duration-300 ${
+                    distanceChanged ? 'scale-110' : 'scale-100'
+                  } ${
                     state.distance !== undefined && state.distance !== null && state.distance !== -1
-                      ? (state.distance >= 2 && state.distance <= 15 ? 'text-red-600' : 'text-blue-600')
+                      ? (state.distance >= 2 && state.distance <= 7 ? 'text-red-600 animate-pulse' : 'text-blue-600')
                       : 'text-gray-500'
                   }`}>
-                    Real-time: {state.distance !== undefined && state.distance !== null && state.distance !== -1 
-                      ? `${state.distance.toFixed(1)} cm` 
+                    {state.distance !== undefined && state.distance !== null && state.distance !== -1 
+                      ? `${state.distance.toFixed(2)} cm` 
                       : 'No Signal'}
-                  </span>
+                  </div>
+                  <div className={`text-xs font-semibold ${
+                    state.distance !== undefined && state.distance !== null && state.distance !== -1
+                      ? (state.distance >= 2 && state.distance <= 7 ? 'text-red-600' : 'text-green-600')
+                      : 'text-gray-500'
+                  }`}>
+                    {state.distance !== undefined && state.distance !== null && state.distance !== -1
+                      ? (state.distance >= 2 && state.distance <= 7 ? '🚨 FEEDING ZONE' : '✅ CLEAR')
+                      : '⚠️ OFFLINE'}
+                  </div>
                 </div>
               </div>
             </div>
