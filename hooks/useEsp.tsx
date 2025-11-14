@@ -24,6 +24,7 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
   const [connected, setConnected] = useState(false)
   const pollRef = useRef<number | null>(null)
   const lastLogRef = useRef<number>(0)
+  const previousStateRef = useRef<EspState>({})
 
   useEffect(() => {
     let mounted = true
@@ -34,7 +35,7 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
 
       try {
         const abortController = new AbortController()
-        const timeoutId = setTimeout(() => abortController.abort(), 3000) // 3s timeout
+        const timeoutId = setTimeout(() => abortController.abort(), 5000) // Increased to 5s timeout
 
         const response = await fetch('/api/mqtt-sensor-data', {
           cache: "no-store",
@@ -50,21 +51,36 @@ export function useEsp(pollInterval = DEFAULT_POLL_INTERVAL) {
         const result = await response.json()
         
         if (result.data) {
-          console.log('📊 Live MQTT sensor data received:', result.data)
-          console.log('🔄 Distance value:', result.data.distance, 'Motion:', result.data.motionDetected)
-          // Batch state updates
-          flushSync(() => {
-            setState(result.data)
-            setConnected(result.connected)
-          })
-          console.log('✅ State updated in useEsp hook')
+          // Only update state if data has actually changed
+          const hasChanged = JSON.stringify(previousStateRef.current) !== JSON.stringify(result.data)
+          
+          if (hasChanged) {
+            console.log('📊 Live MQTT sensor data received:', result.data)
+            console.log('🔄 Distance value:', result.data.distance, 'Motion:', result.data.motionDetected)
+            
+            previousStateRef.current = result.data
+            
+            // Batch state updates
+            flushSync(() => {
+              setState(result.data)
+              setConnected(result.connected)
+            })
+            console.log('✅ State updated in useEsp hook')
+          } else {
+            // Just update connected status if data hasn't changed
+            if (connected !== result.connected) {
+              setConnected(result.connected)
+            }
+          }
         } else {
           console.log('⚠️ No MQTT sensor data available')
           setConnected(result.connected || false)
         }
         
       } catch (error) {
-        console.error('❌ Error fetching MQTT sensor data:', error)
+        if (error instanceof Error && error.name !== 'AbortError') {
+          console.error('❌ Error fetching MQTT sensor data:', error)
+        }
         setConnected(false)
       }
     }
